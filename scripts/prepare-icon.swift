@@ -1,26 +1,25 @@
-// Standard app-icon packaging: the untouched Google Press Assets mark on white.
-// Run on the build Mac. No redraw, recoloring or generated substitute artwork.
-import AppKit
+// Standard app-icon packaging of the original Google Press Assets PNG.
+import CoreGraphics
 import Foundation
+import ImageIO
+import UniformTypeIdentifiers
 
 let root = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
 let source = root.appendingPathComponent("Brand/antigravity-icon__full-color.png")
-guard let image = NSImage(contentsOf: source),
-      let bitmap = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 1024, pixelsHigh: 1024,
-                                    bitsPerSample: 8, samplesPerPixel: 3, hasAlpha: false,
-                                    isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0),
-      let context = NSGraphicsContext(bitmapImageRep: bitmap) else { fatalError("Official icon could not be loaded") }
-NSGraphicsContext.saveGraphicsState()
-NSGraphicsContext.current = context
-context.imageInterpolation = .high
-NSColor.white.setFill()
-NSRect(x: 0, y: 0, width: 1024, height: 1024).fill()
-image.draw(in: NSRect(x: 0, y: 0, width: 1024, height: 1024), from: .zero, operation: .sourceOver, fraction: 1)
-context.flushGraphics()
-NSGraphicsContext.restoreGraphicsState()
-guard let png = bitmap.representation(using: .png, properties: [:]) else { fatalError("Icon encoding failed") }
+guard let input = CGImageSourceCreateWithURL(source as CFURL, nil),
+      let image = CGImageSourceCreateImageAtIndex(input, 0, nil) else { fatalError("Official PNG could not be decoded") }
+guard let context = CGContext(data: nil, width: 1024, height: 1024, bitsPerComponent: 8,
+                              bytesPerRow: 1024 * 4, space: CGColorSpaceCreateDeviceRGB(),
+                              bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue) else { fatalError("RGB icon canvas could not be allocated") }
+context.setFillColor(CGColor(red: 1, green: 1, blue: 1, alpha: 1))
+context.fill(CGRect(x: 0, y: 0, width: 1024, height: 1024))
+context.interpolationQuality = .high
+context.draw(image, in: CGRect(x: 0, y: 0, width: 1024, height: 1024))
+guard let icon = context.makeImage() else { fatalError("Icon rendering failed") }
 let output = root.appendingPathComponent("Sources/Assets.xcassets/AppIcon.appiconset/AppIcon.png")
-try png.write(to: output)
+guard let destination = CGImageDestinationCreateWithURL(output as CFURL, UTType.png.identifier as CFString, 1, nil) else { fatalError("Icon output could not be created") }
+CGImageDestinationAddImage(destination, icon, nil)
+guard CGImageDestinationFinalize(destination) else { fatalError("Icon encoding failed") }
 try FileManager.default.createDirectory(at: root.appendingPathComponent("dist"), withIntermediateDirectories: true)
-try png.write(to: root.appendingPathComponent("dist/official-icon.png"))
+try Data(contentsOf: output).write(to: root.appendingPathComponent("dist/official-icon.png"))
 print("Packaged original Google Antigravity mark: 1024×1024 RGB, opaque white background")
