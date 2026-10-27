@@ -8,7 +8,7 @@ struct NativeMessageRow: View {
             HStack(spacing: 6) {
                 if message.role == "user" { Image(systemName: "person.fill") }
                 else if message.role == "toolResult" { Image(systemName: "terminal") }
-                else { NativePiLogo(size: 20) }
+                else { NativeAGYLogo(size: 20) }
                 Text(message.role == "user" ? "你" : message.role == "toolResult" ? (message.value["toolName"].string.isEmpty ? "工具结果" : message.value["toolName"].string) : "AGY")
                 if streaming { ProgressView().controlSize(.mini) }
                 Spacer()

@@ -15,7 +15,7 @@ args = parser.parse_args()
 key = Path(args.key_file).read_text().strip()
 def api(path, body=None, method='GET'):
     request = urllib.request.Request(args.url+'/v1/'+path, data=json.dumps(body).encode() if body is not None else None,
-                                     headers={'Authorization':'Bearer '+key,'Content-Type':'application/json'}, method=method)
+                                     headers={'Authorization':'Bearer '+key,'Content-Type':'application/json','User-Agent':'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148 AGY-iPhone/1.0'}, method=method)
     with urllib.request.urlopen(request, timeout=50) as response:
         return json.load(response)
 
@@ -30,7 +30,7 @@ try:
         first = api(f'sessions/{sid}/messages',body,'POST')
         duplicate = api(f'sessions/{sid}/messages',body,'POST')
         assert len(first['messages']) == len(duplicate['messages']), 'Duplicate admission'
-        request = urllib.request.Request(args.url+f'/v1/sessions/{sid}/events',headers={'Authorization':'Bearer '+key})
+        request = urllib.request.Request(args.url+f'/v1/sessions/{sid}/events',headers={'Authorization':'Bearer '+key,'User-Agent':'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148 AGY-iPhone/1.0'})
         with urllib.request.urlopen(request,timeout=35) as stream:
             first_event = None
             for line in stream:

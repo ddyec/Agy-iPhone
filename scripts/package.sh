@@ -2,6 +2,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 mkdir -p dist
+swift scripts/prepare-icon.swift
 xcodebuild -project AGY.xcodeproj -scheme AGY -configuration Release \
   -destination 'generic/platform=iOS' -archivePath build/AGY.xcarchive \
   -derivedDataPath build/DerivedData CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO \

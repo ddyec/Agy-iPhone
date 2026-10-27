@@ -25,7 +25,7 @@ struct AGYRoot: View {
 }
 struct AGYConnection: View {
     @EnvironmentObject private var store: AGYStore
-    @State private var address = ""
+    @State private var address = "https://agy.yectech.uk"
     @State private var key = ""
     @State private var visible = false
     @FocusState private var focused: Bool
@@ -33,7 +33,7 @@ struct AGYConnection: View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 24) {
-                    NativePiLogo(size: 64).padding(.top, 36)
+                    NativeAGYLogo(size: 64).padding(.top, 36)
                     Text("AGY，随身同行。 ").font(.largeTitle.bold())
                     Text("连接你的服务器，在 iPhone 上继续工作。").font(.body).foregroundStyle(.secondary)
                     VStack(alignment: .leading, spacing: 14) {
@@ -56,7 +56,7 @@ struct AGYConnection: View {
                     Text("连接信息保存在本机钥匙串。Google 账号由服务器上的 AGY 管理。").font(.footnote).foregroundStyle(.secondary)
                 }.padding(24)
             }.background(NativeTheme.canvas).navigationTitle("AGY").navigationBarTitleDisplayMode(.inline)
-                .onAppear { address = store.storedURL }
+                .onAppear { if !store.storedURL.isEmpty { address = store.storedURL } }
         }
     }
 }
@@ -71,7 +71,7 @@ struct AGYChat: View {
                     LazyVStack(alignment: .leading, spacing: 14) {
                         if store.selected?.messages?.isEmpty != false {
                             VStack(alignment: .leading, spacing: 16) {
-                                NativePiLogo(size: 52)
+                                NativeAGYLogo(size: 52)
                                 Text("今天想做些什么？").font(.title.bold())
                                 Text("分析代码、整理思路，或继续服务器上的工作。").foregroundStyle(.secondary)
                                 ForEach(["查看当前目录，介绍项目结构", "帮我分析一个问题，先给出计划"], id: \.self) { text in
@@ -204,7 +204,7 @@ struct AGYSettings: View {
                     ForEach(store.roots, id: \.self) { Text($0).font(.caption).textSelection(.enabled) }
                 }
                 Section("关于") {
-                    LabeledContent("版本", value: "1.0.0")
+                    LabeledContent("版本", value: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "")
                     Text("独立的原生 AGY 客户端，沿用 Pi iPhone 的聊天体验。Google 登录与任务运行在服务器上完成。").font(.footnote)
                     Text("App 会话由独立网关管理，当前不导入官方 Remote Control 的会话列表。切到后台后服务器任务继续，回到前台重新同步。").font(.footnote).foregroundStyle(.secondary)
                 }

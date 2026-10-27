@@ -1,10 +1,9 @@
 import SwiftUI
 
-struct NativePiLogo: View {
+struct NativeAGYLogo: View {
     var size: CGFloat = 48
     var body: some View {
-        Image(systemName: "a.circle.fill").resizable().scaledToFit()
-            .foregroundStyle(LinearGradient(colors: [.cyan, .blue, .indigo], startPoint: .topLeading, endPoint: .bottomTrailing))
+        Image("AntigravityMark").resizable().scaledToFit()
             .frame(width: size, height: size).accessibilityLabel("AGY")
     }
 }

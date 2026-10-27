@@ -1,4 +1,5 @@
 import Foundation
+import UIKit
 
 struct AGYModel: Codable, Identifiable, Hashable {
     let id: String
@@ -76,6 +77,10 @@ final class AGYRedirectPolicy: NSObject, URLSessionTaskDelegate {
         request.httpMethod = method
         request.setValue("Bearer " + credentials.token, forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Accept")
+        // Match the mobile client identity used by the existing Pi app so the
+        // origin's Browser Integrity Check accepts native API requests.
+        let os = UIDevice.current.systemVersion.replacingOccurrences(of: ".", with: "_")
+        request.setValue("Mozilla/5.0 (iPhone; CPU iPhone OS \(os) like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148 AGY-iPhone/1.0.1", forHTTPHeaderField: "User-Agent")
         if let body { request.httpBody = try JSONEncoder().encode(body); request.setValue("application/json", forHTTPHeaderField: "Content-Type") }
         return request
     }
