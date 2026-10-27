@@ -1,4 +1,17 @@
-# AGY iPhone 1.0.0 / build 1
+# AGY iPhone validation
+
+## 1.0.1 / build 2
+
+- [GitHub Actions run 40456747196](https://github.com/ddyec/Agy-iPhone/actions/runs/40456747196) passed all protocol/gateway tests and the physical iPhone archive. IPA source commit: `ad115f0e17380a95de3d59417247c4f55d026454`. Downloaded IPA revalidation confirmed version 1.0.1, build 2, arm64 iPhoneOS and the native rendering marker. The exported official app icon was visually inspected and checked as an opaque 1024×1024 RGB PNG.
+
+- Dedicated remotely managed Cloudflare tunnel `agy-iphone` serves `https://agy.yectech.uk` and is installed as an enabled systemd user service. The earlier temporary tunnel process has been replaced. Tunnel state was verified healthy via the Cloudflare API.
+- Public requests with no gateway key or an incorrect key returned 401; an authorized request returned 200. The zone’s existing Browser Integrity Check is preserved. Native requests now identify their actual iOS version and the AGY iPhone client in the mobile User-Agent, matching the existing Pi compatibility approach.
+- A real two-turn probe through the public HTTPS hostname preserved the same AGY conversation ID and recovered the marker from the previous turn. Initial running-state SSE snapshots arrived after 347 ms and 309 ms, before the turns completed at 12.365 s and 6.915 s. The probe session was removed from the gateway afterwards. These are server-to-public-ingress measurements, not physical iPhone results.
+- Official full-color PNG/SVG were downloaded unchanged from Google Press Assets. The App’s mark image is byte-identical to the official PNG. SHA-256: `e0cd08ccd10cd8d08ccf0ba449823ee88495825c0841619618100d3ab089f51e`. The device icon uses the same mark composited on white at 1024×1024; the custom A icon has been removed.
+- Native login now prefills the fixed HTTPS hostname. Gateway and Cloudflare credentials remain outside source control and public build artifacts.
+- Device acceptance and unsupported features below remain unchanged.
+
+## 1.0.0 / build 1 archive
 
 ## Verified
 
@@ -16,13 +29,13 @@
 
 - No iPhone device was attached. Keyboard geometry, scrolling, VoiceOver, app switching, signing/install and real mobile-network recovery still need physical-device acceptance. No simulator was run, consistent with the existing Pi project convention.
 - The binary requires personal re-signing. No Apple distribution certificate, App Store upload or TestFlight delivery was configured.
-- No public HTTPS ingress has been created. Automatic approval review rejected creating a public Cloudflare tunnel pending explicit user authorization because it exposes authenticated AGY execution capability. Loopback-only tests and packaging proceeded independently.
+- The original 1.0.0 package preceded public-ingress authorization. The user subsequently authorized the public endpoint; current deployment and request verification are recorded in the 1.0.1 section above.
 - App-managed session history does not import the official Remote Control history. Native interactive tool approvals, attachments, file browser/download and push notifications are not implemented in this first release. CLI permissions remain in effect; the adapter never sets `--dangerously-skip-permissions`.
 
 ## Device acceptance
 
 1. Re-sign and install with Bundle ID `com.ddyec.agy-iphone`, leaving Pi installed.
-2. Once an HTTPS ingress is authorized and configured, enter its address and the separate gateway key. Restart the App and confirm keychain restoration.
+2. Enter `https://agy.yectech.uk` and the separately delivered gateway key. Restart the App and confirm keychain restoration.
 3. Send a short message, check incremental text, then ask a follow-up that depends on the first answer. Close/reopen while a response runs and compare the reconciled history.
 4. Test Chinese keyboard, multiline composer, large text, light/dark appearances, long code/table horizontal scrolling, copy/share and history selection.
 5. Drop the network during send. Verify the App shows an uncertain send state, preserves its request ID and reconciles or retries that same ID without duplicate execution.

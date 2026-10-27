@@ -1,10 +1,14 @@
 # AGY for iPhone
 
-独立的 SwiftUI 原生 Antigravity CLI 客户端，沿用 [Pi iPhone](https://github.com/ddyec/Pi-iPhone) 的消息展示与界面基础。iOS 17+、仅 iPhone，无第三方 Swift 依赖。Bundle ID：`com.ddyec.agy-iphone`，可与 Pi 同时安装。
+独立的 SwiftUI 原生 Antigravity CLI 客户端，沿用 [Pi iPhone](https://github.com/ddyec/Pi-iPhone) 的消息展示与界面基础。iOS 17+、仅 iPhone，无第三方 Swift 依赖。Bundle ID：`com.ddyec.agy-iphone`，可与 Pi 同时安装。当前版本 1.0.1 / build 2。
+
+App 图标、登录页、欢迎页和消息标识使用 [Google 官方 Antigravity Press Assets](https://antigravity.google/press) 全彩原图；来源与打包说明见 `Brand/README.md`。
 
 聊天、模型选择、历史、工具详情与设置均为原生界面，不加载桌面网页。输入框跟随键盘与安全区，支持深浅色、动态字体、复制、分享、Markdown、代码和表格。
 
 ## 接入方式
+
+当前部署的固定入口为 `https://agy.yectech.uk`，通过独立 Cloudflare 命名隧道连接服务器网关，支持持续 SSE。App 已预填该地址；连接密钥另行私密交付，不在本仓库或 IPA 中。
 
 服务器运行 `Server/gateway.py`，通过官方 `agy --input-format stream-json --output-format stream-json` 协议执行任务，用 `--conversation <id>` 续聊。Google OAuth 凭据留在服务器。iPhone 使用独立连接密钥，并将连接信息保存在钥匙串中。网关仅监听回环地址，应由 HTTPS 反向代理或隧道对外提供访问，不要直接把明文 HTTP 端口暴露到公网。
 

@@ -21,7 +21,7 @@ def api(path, body=None, method='GET'):
 
 session = api('sessions', {'cwd':args.workspace,'mode':'plan'}, 'POST')
 sid = session['id']
-report = {'timestamp':time.time(), 'scope':'live AGY CLI via local authenticated gateway', 'turns':[]}
+report = {'timestamp':time.time(), 'scope':'live AGY CLI via authenticated gateway', 'endpoint':args.url, 'turns':[]}
 try:
     for text in ['Remember the marker AGY_NATIVE_20261027. Reply with exactly that marker and nothing else. Do not use tools.',
                  'What exact marker did I ask you to remember in the previous message? Reply with only that marker. Do not use tools.']:
