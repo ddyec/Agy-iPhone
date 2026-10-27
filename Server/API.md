@@ -2,7 +2,7 @@
 
 Base URL: `https://agy.yectech.uk`. All routes require `Authorization: Bearer <gateway-key>`. This is the separately delivered App gateway key, not a Google OAuth or Cloudflare token. No credentials appear in this repository.
 
-The current zone retains Browser Integrity Check. The native App sends a mobile User-Agent identifying its iOS version and `AGY-iPhone/1.1.0`. External API integrations should use a compatible mobile client User-Agent too; Python's default User-Agent is rejected by the existing zone before reaching the gateway.
+The current zone retains Browser Integrity Check. The native App sends a mobile User-Agent identifying its iOS version and `AGY-iPhone`. External API integrations should use a compatible mobile client User-Agent too; Python's default User-Agent is rejected by the existing zone before reaching the gateway.
 
 ## Read account limits
 

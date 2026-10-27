@@ -1,5 +1,17 @@
 # AGY iPhone validation
 
+## 1.1.0 / build 3
+
+- [GitHub Actions run 40459949881](https://github.com/ddyec/Agy-iPhone/actions/runs/40459949881) passed gateway, native protocol, coordinated-document/photo-import tests and the physical iPhone archive. Downloaded IPA was rechecked as version 1.1.0 / build 3, arm64 iPhoneOS, native rendering, source commit `11bd09a628f27b2458c73f22465d51e229445d41`.
+
+- The gateway-only runtime is now official CLI 1.4.8, verified against the release manifest SHA-512. Existing Pi container binaries and the original Remote Control binary were left unchanged.
+- Real model discovery returns 13 canonical variants, including `gemini-4-argon-low`, `gemini-4-argon-medium` and `gemini-4-argon-high`. The prior 1.1.27 runtime omitted Gemini 4 from its own `models` output; the native client did not filter it out.
+- `/v1/limits` reads the structured `command.data` from `agy -p /usage --output-format json`. Public HTTPS verification returned Gemini Models, Claude and GPT models, and Gemini 4 Argon quota groups with actual remaining fractions and reset timestamps. The CLI command itself reported zero inference turns/tokens. No absolute token allowance was inferred.
+- Public HTTPS integration uploaded a synthetic quadrant-color PNG and a text file as raw bytes. Gemini 4 Argon Medium correctly reported red in the top-left, yellow in the bottom-right and the marker `ATTACHMENT_READ_6384`. The returned source paths pointed to uploaded copies under the session's `.agy-uploads` directory. Switching that same session to Gemini 3.8 Flash Low preserved the AGY conversation ID and recalled the exact marker without re-uploading or re-reading tools.
+- Eight gateway scenarios passed locally: HTTP authentication/SSE, uploads with exact bytes, per-session ownership, attachment-only prompts, duplicate request admission, payload conflicts, traversal and symlink rejection, oversized-file rejection, truncated-transfer cleanup, quota parsing, model switching with preserved history, process stop and restart recovery.
+- Native import routines are reused from Pi: coordinated iCloud/document reads and orientation-aware JPEG downsampling. CI now runs their real-file/EXIF/oversize tests without a simulator.
+- iPhone picker presentation, keyboard behavior, large uploads over a mobile network and native quota/model screens still require physical-device acceptance. No simulator was run.
+
 ## 1.0.1 / build 2
 
 - [GitHub Actions run 40456747196](https://github.com/ddyec/Agy-iPhone/actions/runs/40456747196) passed all protocol/gateway tests and the physical iPhone archive. IPA source commit: `ad115f0e17380a95de3d59417247c4f55d026454`. Downloaded IPA revalidation confirmed version 1.0.1, build 2, arm64 iPhoneOS and the native rendering marker. The exported official app icon was visually inspected and checked as an opaque 1024×1024 RGB PNG.
@@ -13,7 +25,7 @@
 
 ## 1.0.0 / build 1 archive
 
-## Verified
+### Verified
 
 - Source archived in IPA: `728335c45c56a9637c1c595426bc10d2abe39d83`.
 - [GitHub Actions run 40451643292](https://github.com/ddyec/Agy-iPhone/actions/runs/40451643292): gateway tests, native SSE/message/Markdown regression checks, Xcode project generation, Release iPhoneOS archive, ad-hoc signature and IPA structural verification all passed.
@@ -25,14 +37,14 @@
 - Gateway regression tests cover authenticated HTTP/SSE, Unicode, final response reconciliation, tool transition deduplication, request idempotency/conflict, concurrent admission rejection, stop-before-launch/process stop, restart without resubmission, workspace escape/symlinks, invalid model selection, and gateway deletion. Five test scenarios passed locally and in CI using a fake CLI fixture; the separate two-turn smoke above used the real CLI.
 - A dedicated systemd user service runs the gateway on `127.0.0.1:8766`. Its separate connection key is held in a restricted server-local file. Existing Pi services and the official AGY Remote Control daemon remain available.
 
-## Not verified / not included
+### Not verified / not included
 
 - No iPhone device was attached. Keyboard geometry, scrolling, VoiceOver, app switching, signing/install and real mobile-network recovery still need physical-device acceptance. No simulator was run, consistent with the existing Pi project convention.
 - The binary requires personal re-signing. No Apple distribution certificate, App Store upload or TestFlight delivery was configured.
 - The original 1.0.0 package preceded public-ingress authorization. The user subsequently authorized the public endpoint; current deployment and request verification are recorded in the 1.0.1 section above.
 - App-managed session history does not import the official Remote Control history. Native interactive tool approvals, attachments, file browser/download and push notifications are not implemented in this first release. CLI permissions remain in effect; the adapter never sets `--dangerously-skip-permissions`.
 
-## Device acceptance
+### Device acceptance
 
 1. Re-sign and install with Bundle ID `com.ddyec.agy-iphone`, leaving Pi installed.
 2. Enter `https://agy.yectech.uk` and the separately delivered gateway key. Restart the App and confirm keychain restoration.

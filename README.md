@@ -1,6 +1,6 @@
 # AGY for iPhone
 
-独立的 SwiftUI 原生 Antigravity CLI 客户端，沿用 [Pi iPhone](https://github.com/ddyec/Pi-iPhone) 的消息展示与界面基础。iOS 17+、仅 iPhone，无第三方 Swift 依赖。Bundle ID：`com.ddyec.agy-iphone`，可与 Pi 同时安装。当前版本 1.0.1 / build 2。
+独立的 SwiftUI 原生 Antigravity CLI 客户端，沿用 [Pi iPhone](https://github.com/ddyec/Pi-iPhone) 的消息展示与界面基础。iOS 17+、仅 iPhone，无第三方 Swift 依赖。Bundle ID：`com.ddyec.agy-iphone`，可与 Pi 同时安装。当前版本 1.1.0 / build 3。
 
 App 图标、登录页、欢迎页和消息标识使用 [Google 官方 Antigravity Press Assets](https://antigravity.google/press) 全彩原图；来源与打包说明见 `Brand/README.md`。
 
@@ -44,8 +44,14 @@ GitHub Actions 同时执行网关测试、原生协议测试、iPhoneOS arm64 �
 
 按 Pi 项目的既有约定不运行模拟器。编译和协议测试不代表 iPhone 真机验收；需要实际验证键盘、后台切换、断线恢复及长对话滚动。
 
-## 第一版边界
+## 当前功能与边界
 
-已实现文本聊天、流式回复、历史、重命名/删除、模型与工作目录选择、执行模式、工具详情、停止、断线恢复和请求去重。附件/图片输入、文件浏览下载、APNs、原生工具审批、官方 Remote Control 会话导入尚未实现，不显示不可用的操作入口。
+已实现文本与图片/文件输入、流式回复、历史、重命名/删除、模型与工作目录选择、执行模式、工具详情、停止、断线恢复和请求去重。输入框左侧“+”打开原生照片图库或文件选择器，支持多选、缩略图、大小、移除和上传进度。单个附件不超过 25 MiB、最多 8 个、合计不超过 50 MiB。照片按方向缩至 2048 像素 JPEG，文档保持原始字节；上传后通过 AGY 自身的文件/图片工具读取。
+
+网关专用 CLI 已升级至 1.4.8，真实模型清单含 Gemini 4 Argon 的 Low / Medium / High 三档；模型面板支持主动刷新。已有会话在任务结束后可以切换模型，保留对话上下文。
+
+“设置 → 账户额度”读取 `/v1/limits`，显示账户真实剩余比例与重置时间，包括独立的 Gemini 4 Argon 额度。接口细节见 [Server/API.md](Server/API.md)。
+
+文件浏览下载、APNs、原生工具审批、官方 Remote Control 会话导入尚未实现。
 
 官方协议参考：[Headless mode](https://antigravity.google/docs/cli/headless/)。当前服务器实测 CLI 版本与验证结果见 `VALIDATION.md`。
