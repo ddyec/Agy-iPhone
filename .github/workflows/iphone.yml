@@ -32,6 +32,7 @@ jobs:
           path: |
             dist/AGY-iPhone-resign.ipa
             dist/build-manifest.json
+            dist/official-icon.png
           if-no-files-found: error
       - name: Upload build log
         if: always()
