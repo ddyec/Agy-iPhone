@@ -1,4 +1,11 @@
 import SwiftUI
+import PhotosUI
+
+struct AGYDraftAttachment: Identifiable {
+    let id = UUID()
+    let imported: ImportedAttachment
+    var uploaded: AGYAttachment?
+}
 
 @MainActor final class AGYStore: ObservableObject {
     @Published var tab = 0
@@ -15,6 +22,14 @@ import SwiftUI
     @Published var error: String?
     @Published var connection = "尚未连接"
     @Published var pending: PendingSend?
+    @Published var attachments: [AGYDraftAttachment] = []
+    @Published var importing = false
+    @Published var uploadProgress = ""
+    @Published var limits: AGYLimits?
+    @Published var limitsLoading = false
+    @Published var limitsError: String?
+    @Published var modelsLoading = false
+    private(set) var attachmentContext = UUID()
     private var api: AGYAPI?
     private var streamTask: Task<Void, Never>?
     private var epoch = UUID()
@@ -24,8 +39,9 @@ import SwiftUI
         let sessionID: String
         let requestID: String
         let text: String
+        var attachments: [String]?
     }
-    var canSend: Bool { connected && !busy && selected?.running != true && pending == nil && !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+    var canSend: Bool { connected && !busy && !importing && selected?.running != true && pending == nil && (!draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !attachments.isEmpty) }
     var storedURL: String {
         guard let data = SecureStore.read("connection"), let c = try? JSONDecoder().decode(AGYCredentials.self, from: data) else { return "" }
         return c.url.absoluteString
@@ -67,6 +83,7 @@ import SwiftUI
         } catch { if epoch == token { self.error = error.localizedDescription } }
     }
     func select(_ id: String) async {
+        if selected?.id != id { attachmentContext = UUID(); attachments = []; importing = false }
         selectionEpoch = UUID(); let token = selectionEpoch, account = epoch
         streamTask?.cancel()
         guard let api else { return }
@@ -83,11 +100,13 @@ import SwiftUI
     func newConversation() {
         guard pending == nil else { error = "请先核对上一条发送结果。"; return }
         selectionEpoch = UUID(); streamTask?.cancel(); selected = nil; error = nil; connection = "已就绪"
+        attachmentContext = UUID(); attachments = []; importing = false
     }
     private func reconcilePending(_ s: AGYSession) {
         if let p = pending, p.sessionID == s.id, s.messages?.contains(where: { $0.id == p.requestID }) == true {
             if draft == p.text { draft = ""; saveDraft() }
             pending = nil; SecureStore.delete("pending-send")
+            attachments.removeAll { item in p.attachments?.contains(item.uploaded?.id ?? "") == true }
         }
     }
     func send() async {
@@ -102,14 +121,23 @@ import SwiftUI
                 selected = s
             }
             guard let id = selected?.id else { return }
-            let p = PendingSend(sessionID: id, requestID: UUID().uuidString.lowercased(), text: draft)
+            for i in attachments.indices {
+                if attachments[i].uploaded == nil {
+                    uploadProgress = "正在上传 \(i + 1)/\(attachments.count)：\(attachments[i].imported.name)"
+                    let uploaded = try await api.upload(attachments[i].imported, sessionID: id)
+                    guard epoch == account, selected?.id == id else { return }
+                    attachments[i].uploaded = uploaded
+                }
+            }
+            uploadProgress = ""
+            let p = PendingSend(sessionID: id, requestID: UUID().uuidString.lowercased(), text: draft, attachments: attachments.compactMap { $0.uploaded?.id })
             guard SecureStore.write(try JSONEncoder().encode(p), account: "pending-send") else { throw AGYError.message("无法保存发送编号，消息尚未发送。") }
             pending = p
             try await submit(p, api: api, account: account)
-        } catch { if epoch == account { self.error = pending == nil ? error.localizedDescription : "发送结果待确认。请核对会话，或使用相同编号重试。\n" + error.localizedDescription } }
+        } catch { if epoch == account { uploadProgress = ""; self.error = pending == nil ? error.localizedDescription : "发送结果待确认。请核对会话，或使用相同编号重试。\n" + error.localizedDescription } }
     }
     private func submit(_ p: PendingSend, api: AGYAPI, account: UUID) async throws {
-        let s: AGYSession = try await api.json("sessions/\(p.sessionID)/messages", method: "POST", body: .object(["text": .string(p.text), "requestID": .string(p.requestID)]))
+        let s: AGYSession = try await api.json("sessions/\(p.sessionID)/messages", method: "POST", body: .object(["text": .string(p.text), "requestID": .string(p.requestID), "attachments": .array((p.attachments ?? []).map { .string($0) })]))
         guard epoch == account else { return }
         reconcilePending(s)
         if selected?.id == s.id { selected = s; watch(s.id) }
@@ -126,6 +154,57 @@ import SwiftUI
         guard let id = selected?.id, let api else { return }
         do { let _: AGYSession = try await api.json("sessions/\(id)/stop", method: "POST", body: .object([:])); await select(id) }
         catch { self.error = error.localizedDescription }
+    }
+    func add(_ imported: ImportedAttachment, context: UUID) throws {
+        guard context == attachmentContext else { return }
+        guard attachments.count < 8, attachments.reduce(0, { $0 + $1.imported.data.count }) + imported.data.count <= 50 * 1024 * 1024 else { throw AttachmentImportError.limit }
+        guard imported.data.count <= NativeAttachmentReader.maxFileBytes else { throw AttachmentImportError.tooLarge }
+        attachments.append(AGYDraftAttachment(imported: imported))
+    }
+    func importFiles(_ urls: [URL], context: UUID) async {
+        guard context == attachmentContext else { return }
+        importing = true
+        defer { if context == attachmentContext { importing = false } }
+        for url in urls {
+            do { let item = try await Task.detached { try NativeAttachmentReader.read(url) }.value; try add(item, context: context) }
+            catch { if context == attachmentContext { self.error = error.localizedDescription } }
+        }
+    }
+    func importPhotos(_ photos: [PHPickerResult], context: UUID) async {
+        guard context == attachmentContext else { return }
+        importing = true
+        defer { if context == attachmentContext { importing = false } }
+        for photo in photos {
+            do { let item = try await NativePhotoImport.load(photo); try add(item, context: context) }
+            catch { if context == attachmentContext { self.error = error.localizedDescription } }
+        }
+    }
+    func refreshModels() async {
+        guard let api, !modelsLoading else { return }
+        modelsLoading = true; let account = epoch
+        defer { if account == epoch { modelsLoading = false } }
+        do { let result: AGYModels = try await api.json("models", query: ["refresh": "1"]); if account == epoch { models = result.models } }
+        catch { if account == epoch { self.error = error.localizedDescription } }
+    }
+    func setModel(_ value: String) async {
+        guard !busy, selected?.running != true, let api else { return }
+        if selected == nil { model = value; return }
+        guard let id = selected?.id else { return }
+        let account = epoch
+        busy = true
+        defer { if account == epoch { busy = false } }
+        do {
+            let updated: AGYSession = try await api.json("sessions/\(id)", method: "PATCH", body: .object(["model": .string(value)]))
+            guard account == epoch, selected?.id == id else { return }
+            selected = updated; model = updated.model; await reload()
+        } catch { if account == epoch { self.error = error.localizedDescription } }
+    }
+    func refreshLimits() async {
+        guard let api, !limitsLoading else { return }
+        limitsLoading = true; limitsError = nil; let account = epoch
+        defer { if account == epoch { limitsLoading = false } }
+        do { let result: AGYLimits = try await api.json("limits", query: ["refresh": "1"]); if account == epoch { limits = result } }
+        catch { if account == epoch { limitsError = error.localizedDescription } }
     }
     func rename(_ s: AGYSession, name: String) async {
         guard let api else { return }
@@ -173,5 +252,6 @@ import SwiftUI
         epoch = UUID(); selectionEpoch = UUID(); streamTask?.cancel(); api?.invalidate(); api = nil
         SecureStore.delete("connection"); SecureStore.delete("pending-send"); pending = nil
         connected = false; busy = false; sessions = []; selected = nil; draft = ""; saveDraft(); error = nil; connection = "尚未连接"
+        attachmentContext = UUID(); attachments = []; importing = false; uploadProgress = ""; limits = nil; limitsLoading = false; modelsLoading = false
     }
 }

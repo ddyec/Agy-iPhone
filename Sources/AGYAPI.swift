@@ -4,6 +4,33 @@ import UIKit
 struct AGYModel: Codable, Identifiable, Hashable {
     let id: String
     let name: String
+    var family: String { name.components(separatedBy: " (").first ?? name }
+}
+struct AGYAttachment: Codable, Identifiable {
+    let id: String
+    let name: String
+    let mime: String
+    let size: Int
+}
+struct AGYLimits: Decodable {
+    let fetchedAt: Double
+    let source: String
+    let groups: [AGYLimitGroup]
+}
+struct AGYLimitGroup: Decodable, Identifiable {
+    let name: String
+    var description: String?
+    let buckets: [AGYLimitBucket]
+    var id: String { name }
+}
+struct AGYLimitBucket: Decodable, Identifiable {
+    let id: String
+    let name: String
+    var remaining_fraction: Double?
+    var reset_time: String?
+    var window: String?
+    var reset: Date? { reset_time.flatMap { ISO8601DateFormatter().date(from: $0) } }
+    var title: String { window == "5h" ? "5 小时额度" : window == "weekly" ? "每周额度" : name }
 }
 struct AGYTool: Codable, Identifiable {
     let id: String
@@ -17,6 +44,7 @@ struct AGYMessage: Codable, Identifiable {
     let role: String
     let text: String
     var tools: [AGYTool]?
+    var attachments: [AGYAttachment]?
     var rendered: ChatMessage { ChatMessage(id: id, value: .object(["role": .string(role), "content": .string(text)])) }
 }
 struct AGYSession: Codable, Identifiable {
@@ -72,8 +100,10 @@ final class AGYRedirectPolicy: NSObject, URLSessionTaskDelegate {
         config.requestCachePolicy = .reloadIgnoringLocalCacheData
         session = URLSession(configuration: config, delegate: policy, delegateQueue: nil)
     }
-    func request(_ path: String, method: String = "GET", body: WireValue? = nil) throws -> URLRequest {
-        var request = URLRequest(url: credentials.url.appendingPathComponent("v1").appendingPathComponent(path))
+    func request(_ path: String, query: [String: String] = [:], method: String = "GET", body: WireValue? = nil) throws -> URLRequest {
+        var target = URLComponents(url: credentials.url.appendingPathComponent("v1").appendingPathComponent(path), resolvingAgainstBaseURL: false)!
+        if !query.isEmpty { target.queryItems = query.sorted { $0.key < $1.key }.map { URLQueryItem(name: $0.key, value: $0.value) } }
+        var request = URLRequest(url: target.url!)
         request.httpMethod = method
         request.setValue("Bearer " + credentials.token, forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Accept")
@@ -91,10 +121,19 @@ final class AGYRedirectPolicy: NSObject, URLSessionTaskDelegate {
             throw AGYError.message(http.statusCode == 401 ? "连接密钥已失效，请重新连接。" : text.isEmpty ? "服务器返回 HTTP \(http.statusCode)" : text)
         }
     }
-    func json<T: Decodable>(_ path: String, method: String = "GET", body: WireValue? = nil) async throws -> T {
-        let (data, response) = try await session.data(for: request(path, method: method, body: body))
+    func json<T: Decodable>(_ path: String, query: [String: String] = [:], method: String = "GET", body: WireValue? = nil) async throws -> T {
+        let (data, response) = try await session.data(for: request(path, query: query, method: method, body: body))
         try validate(response, data: data)
         return try JSONDecoder().decode(T.self, from: data)
+    }
+    func upload(_ attachment: ImportedAttachment, sessionID: String) async throws -> AGYAttachment {
+        guard attachment.data.count <= NativeAttachmentReader.maxFileBytes else { throw AttachmentImportError.tooLarge }
+        var req = try request("sessions/\(sessionID)/attachments", query: ["name": attachment.name], method: "POST")
+        req.setValue(attachment.mime, forHTTPHeaderField: "Content-Type")
+        req.timeoutInterval = 300
+        let (data, response) = try await session.upload(for: req, from: attachment.data)
+        try validate(response, data: data)
+        return try JSONDecoder().decode(AGYAttachment.self, from: data)
     }
     func events(_ id: String, receive: @escaping (AGYSession) -> Void) async throws {
         var req = try request("sessions/\(id)/events")

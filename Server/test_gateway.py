@@ -1,4 +1,5 @@
 import importlib.util
+import io
 import json
 from pathlib import Path
 import tempfile
@@ -15,6 +16,10 @@ FAKE = '''#!/usr/bin/env python3
 import json,sys,time
 if "models" in sys.argv:
  print("test-model\\tTest Model")
+ print("gemini-4-argon-medium\\tGemini 4 Argon (Medium)")
+ sys.exit(0)
+if "/usage" in sys.argv:
+ print(json.dumps({"status":"SUCCESS","command":{"data":{"groups":[{"name":"Gemini 4 Argon","buckets":[{"id":"argon-weekly","name":"Weekly","remaining_fraction":0.42,"reset_time":"2026-11-03T06:03:08Z","window":"weekly"}]}]}}}))
  sys.exit(0)
 message=json.loads(sys.stdin.readline())["message"]["content"]
 cid="12345678-1234-1234-1234-123456789abc"
@@ -101,6 +106,53 @@ class GatewayTests(unittest.TestCase):
         finally:
             other.db.close()
 
+    def test_upload_integrity_ownership_and_admission(self):
+        s = self.g.create({})
+        payload = b'\x00\xffnative file\n'
+        a = self.g.upload(s['id'], '中文 file.png', 'image/png', io.BytesIO(payload), len(payload))
+        stored = self.g.attachment(s['id'], a['id'])
+        self.assertEqual(Path(stored['path']).read_bytes(), payload)
+        self.assertEqual(a['size'], len(payload))
+        other = self.g.create({})
+        with self.assertRaises(Failure):
+            self.g.submit(other['id'], {'text':'inspect','requestID':str(uuid.uuid4()),'attachments':[a['id']]})
+        body = {'text':'','requestID':str(uuid.uuid4()),'attachments':[a['id']]}
+        self.g.submit(s['id'], body)
+        self.g.submit(s['id'], body)
+        result = self.wait(s['id'])
+        self.assertEqual(len(result['messages']), 2)
+        self.assertEqual(result['messages'][0]['attachments'][0]['name'], '中文 file.png')
+        with self.assertRaises(Failure):
+            self.g.submit(s['id'], {**body, 'attachments':[]})
+
+    def test_upload_bounds_partial_transfer_and_symlink(self):
+        s = self.g.create({})
+        for name, size in [('../escape', 0), ('big.bin', 26*1024*1024)]:
+            with self.assertRaises(Failure):
+                self.g.upload(s['id'], name, 'application/octet-stream', io.BytesIO(), size)
+        with self.assertRaises(Failure):
+            self.g.upload(s['id'], 'partial.bin', 'application/octet-stream', io.BytesIO(b'one'), 100)
+        folder = self.root/'.agy-uploads'/s['id']
+        self.assertEqual(list(folder.iterdir()), [])
+        # A workspace-level symlink must never redirect upload writes.
+        folder.rmdir(); (self.root/'.agy-uploads').rmdir()
+        (self.root/'.agy-uploads').symlink_to('/tmp')
+        with self.assertRaises(Failure):
+            self.g.upload(s['id'], 'file.txt', 'text/plain', io.BytesIO(b'x'), 1)
+
+    def test_limits_and_existing_conversation_model_switch(self):
+        value = self.g.limits()
+        self.assertEqual(value['groups'][0]['buckets'][0]['remaining_fraction'], .42)
+        self.assertEqual(value['groups'][0]['name'], 'Gemini 4 Argon')
+        self.assertEqual(value['source'], 'agy /usage')
+        s = self.g.create({})
+        self.g.submit(s['id'], {'text':'first','requestID':str(uuid.uuid4())})
+        before = self.wait(s['id'])
+        after = self.g.set_model(s['id'], 'gemini-4-argon-medium')
+        self.assertEqual(before['conversationID'], after['conversationID'])
+        self.assertEqual(before['messages'], after['messages'])
+        self.assertEqual(after['model'], 'gemini-4-argon-medium')
+
     def test_http_auth_sse_and_delete(self):
         server = Server(("127.0.0.1", 0), self.g)
         thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -117,6 +169,15 @@ class GatewayTests(unittest.TestCase):
             error.exception.close()
             with request("/v1/sessions", {}, "POST") as response:
                 s = json.load(response)
+            binary = bytes(range(256))
+            req = urllib.request.Request(base + '/v1/sessions/' + s['id'] + '/attachments?name=fixture.bin',
+                                         data=binary, headers={'Authorization':'Bearer '+self.g.key,'Content-Type':'application/octet-stream'})
+            with urllib.request.urlopen(req, timeout=4) as response:
+                attached = json.load(response)
+            self.assertEqual(attached['size'], len(binary))
+            self.assertEqual(Path(self.g.attachment(s['id'], attached['id'])['path']).read_bytes(), binary)
+            with request('/v1/limits') as response:
+                self.assertEqual(json.load(response)['groups'][0]['name'], 'Gemini 4 Argon')
             with request("/v1/sessions/" + s["id"] + "/messages", {"text": "test", "requestID": str(uuid.uuid4())}, "POST") as response:
                 self.assertEqual(response.status, 202)
             with request("/v1/sessions/" + s["id"] + "/events") as response:

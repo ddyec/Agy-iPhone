@@ -17,6 +17,9 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlsplit, parse_qs
 
 MAX_BODY = 256 * 1024
+MAX_FILE = 25 * 1024 * 1024
+MAX_ATTACHMENTS = 8
+MAX_TOTAL = 50 * 1024 * 1024
 
 
 class Failure(Exception):
@@ -44,8 +47,10 @@ class Gateway:
         self.db.execute("PRAGMA journal_mode=WAL")
         self.db.execute("CREATE TABLE IF NOT EXISTS sessions (id TEXT PRIMARY KEY, data TEXT NOT NULL)")
         self.db.execute("CREATE TABLE IF NOT EXISTS requests (id TEXT PRIMARY KEY, session TEXT NOT NULL, digest TEXT NOT NULL)")
+        self.db.execute("CREATE TABLE IF NOT EXISTS attachments (id TEXT PRIMARY KEY, session TEXT NOT NULL, data TEXT NOT NULL)")
         self.db.commit()
         self.models_cache = None
+        self.limits_cache = None
         # Never resubmit an admitted prompt after a crash/restart.
         for s in self.sessions():
             if s["running"]:
@@ -79,9 +84,9 @@ class Gateway:
             raise Failure(403, "工作目录不在允许范围内")
         return str(p)
 
-    def models(self):
+    def models(self, refresh=False):
         with self.lock:
-            if self.models_cache and time.monotonic() - self.models_cache[0] < 300:
+            if not refresh and self.models_cache and time.monotonic() - self.models_cache[0] < 300:
                 return self.models_cache[1]
         try:
             result = subprocess.run(self.prefix + [self.binary, "models"], capture_output=True, text=True, timeout=40, cwd=self.roots[0])
@@ -101,6 +106,94 @@ class Gateway:
             self.models_cache = (time.monotonic(), models)
         return models
 
+    def limits(self, refresh=False):
+        with self.lock:
+            if not refresh and self.limits_cache and time.monotonic()-self.limits_cache[0] < 30:
+                return self.limits_cache[1]
+        try:
+            p = subprocess.run(self.prefix + [self.binary, "-p", "/usage", "--output-format", "json"],
+                               capture_output=True, text=True, timeout=40, cwd=self.roots[0])
+            result = json.loads(p.stdout)
+            data = result.get("command", {}).get("data", {})
+            if p.returncode or result.get("status") != "SUCCESS" or not isinstance(data.get("groups"), list):
+                raise ValueError()
+            value = {"fetchedAt": time.time(), "source": "agy /usage", "groups": data["groups"],
+                     "description": data.get("description", "")}
+        except (OSError, subprocess.TimeoutExpired, ValueError, TypeError):
+            raise Failure(502, "无法读取 AGY 额度；请检查登录和 CLI 版本。")
+        with self.lock:
+            self.limits_cache = (time.monotonic(), value)
+        return value
+
+    @staticmethod
+    def attachment_info(a):
+        return {k: a[k] for k in ("id", "name", "mime", "size")}
+
+    def attachment(self, sid, aid):
+        with self.lock:
+            row = self.db.execute("SELECT data FROM attachments WHERE id=? AND session=?", (aid, sid)).fetchone()
+        if not row:
+            raise Failure(400, "附件不属于此会话或已失效")
+        return json.loads(row[0])
+
+    def upload(self, sid, name, mime, stream, size):
+        s = self.get(sid)
+        if not isinstance(name, str) or not name or len(name) > 255 or any(c in name for c in ("/", "\\", "\r", "\n", "\0")):
+            raise Failure(400, "附件名称无效")
+        if not 0 <= size <= MAX_FILE:
+            raise Failure(413, "单个附件不能超过 25 MB")
+        mime = mime.split(";", 1)[0][:100]
+        if not re.fullmatch(r"[\w.+-]+/[\w.+-]+", mime):
+            mime = "application/octet-stream"
+        cwd = Path(self.workspace(s["cwd"]))
+        aid = str(uuid.uuid4())
+        suffix = Path(name).suffix.lower()
+        if not re.fullmatch(r"\.[a-z0-9]{1,12}", suffix):
+            suffix = ""
+        filename = aid + suffix
+        descriptors = []
+        destination = None
+        try:
+            fd = os.open(cwd, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+            descriptors.append(fd)
+            for folder in (".agy-uploads", sid):
+                try:
+                    os.mkdir(folder, 0o700, dir_fd=fd)
+                except FileExistsError:
+                    pass
+                fd = os.open(folder, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
+                descriptors.append(fd)
+            destination = os.open(filename, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=fd)
+            digest = hashlib.sha256()
+            with os.fdopen(destination, "wb") as output:
+                destination = None
+                left = size
+                while left:
+                    chunk = stream.read(min(left, 65536))
+                    if not chunk:
+                        raise Failure(400, "附件传输中断")
+                    output.write(chunk); digest.update(chunk); left -= len(chunk)
+            a = {"id": aid, "name": name, "mime": mime, "size": size,
+                 "path": str(cwd / ".agy-uploads" / sid / filename), "sha256": digest.hexdigest()}
+            with self.lock:
+                self.db.execute("INSERT INTO attachments VALUES (?,?,?)", (aid, sid, json.dumps(a, ensure_ascii=False)))
+                self.db.commit()
+            return self.attachment_info(a)
+        except OSError:
+            raise Failure(400, "附件目录不可写或含有无效链接")
+        except BaseException:
+            if descriptors:
+                try:
+                    os.unlink(filename, dir_fd=descriptors[-1])
+                except FileNotFoundError:
+                    pass
+            raise
+        finally:
+            if destination is not None:
+                os.close(destination)
+            for fd in reversed(descriptors):
+                os.close(fd)
+
     def create(self, body):
         cwd = self.workspace(body.get("cwd") or str(self.roots[0]))
         model = body.get("model") or self.default_model or self.models()[0]["id"]
@@ -117,13 +210,16 @@ class Gateway:
     def submit(self, sid, body):
         prompt = body.get("text", "")
         rid = body.get("requestID", "")
-        if not isinstance(prompt, str) or not prompt.strip() or len(prompt.encode()) > 200 * 1024:
+        attachment_ids = body.get("attachments", [])
+        if not isinstance(attachment_ids, list) or len(attachment_ids) > MAX_ATTACHMENTS or any(not isinstance(a, str) for a in attachment_ids) or len(set(attachment_ids)) != len(attachment_ids):
+            raise Failure(400, "最多添加 8 个不同附件")
+        if not isinstance(prompt, str) or not (prompt.strip() or attachment_ids) or len(prompt.encode()) > 200 * 1024:
             raise Failure(400, "消息为空或过长")
         try:
             uuid.UUID(rid)
         except (ValueError, TypeError, AttributeError):
             raise Failure(400, "缺少有效请求编号")
-        digest = hashlib.sha256(prompt.encode()).hexdigest()
+        digest = hashlib.sha256((prompt + (json.dumps(attachment_ids) if attachment_ids else "")).encode()).hexdigest()
         with self.lock:
             prior = self.db.execute("SELECT session,digest FROM requests WHERE id=?", (rid,)).fetchone()
             if prior:
@@ -134,16 +230,23 @@ class Gateway:
             if s["running"] or sid in self.active:
                 raise Failure(409, "任务仍在运行")
             self.workspace(s["cwd"])
-            s["messages"].append({"id": rid, "role": "user", "text": prompt})
+            attached = [self.attachment(sid, aid) for aid in attachment_ids]
+            if sum(a["size"] for a in attached) > MAX_TOTAL:
+                raise Failure(413, "附件合计不能超过 50 MB")
+            references = "\n".join("- " + json.dumps(a["name"], ensure_ascii=False) + ": @" + a["path"] for a in attached)
+            cli_prompt = prompt
+            if attached:
+                cli_prompt = (prompt or "请读取并分析这些附件。") + "\n\nUser-uploaded attachments (use the file/image reading tools to inspect their actual contents):\n" + references
+            s["messages"].append({"id": rid, "role": "user", "text": prompt, "attachments": [self.attachment_info(a) for a in attached]})
             s["messages"].append({"id": str(uuid.uuid4()), "role": "assistant", "text": "", "tools": []})
             if s["name"] == "新会话":
-                s["name"] = prompt.strip()[:40]
+                s["name"] = prompt.strip()[:40] or attached[0]["name"][:40]
             s["running"], s["error"], s["modified"] = True, "", time.time()
             # One transaction admits both the user message and its deduplication key.
             self.db.execute("INSERT INTO requests VALUES (?,?,?)", (rid, sid, digest))
             self.save(s)
             self.active.add(sid)
-            threading.Thread(target=self.run, args=(sid, prompt), daemon=True).start()
+            threading.Thread(target=self.run, args=(sid, cli_prompt), daemon=True).start()
             return s
 
     def ingest(self, sid, event):
@@ -260,6 +363,17 @@ class Gateway:
             self.save(s)
             return s
 
+    def set_model(self, sid, model):
+        if not isinstance(model, str) or model not in {m["id"] for m in self.models()}:
+            raise Failure(400, "模型不可用，请刷新模型列表")
+        with self.lock:
+            s = self.get(sid)
+            if s["running"] or sid in self.active:
+                raise Failure(409, "请等待任务结束再切换模型")
+            s["model"] = model
+            self.save(s)
+            return s
+
     def delete(self, sid):
         with self.lock:
             if self.get(sid)["running"] or sid in self.active:
@@ -294,6 +408,19 @@ class Handler(BaseHTTPRequestHandler):
                 raise Failure(401, "连接密钥无效")
             parts = urlsplit(self.path)
             path = parts.path.rstrip("/")
+            query = parse_qs(parts.query)
+            upload = re.fullmatch(r"/v1/sessions/([a-f0-9-]{36})/attachments", path)
+            if self.command == "POST" and upload:
+                self.close_connection = True
+                try:
+                    size = int(self.headers.get("Content-Length", "-1"))
+                except ValueError:
+                    raise Failure(400, "无效附件长度")
+                if not 0 <= size <= MAX_FILE:
+                    self.close_connection = True
+                    raise Failure(413, "单个附件不能超过 25 MB")
+                value = gateway.upload(upload[1], query.get("name", [""])[0], self.headers.get("Content-Type", "application/octet-stream"), self.rfile, size)
+                return self.respond(201, value)
             body = {}
             if self.command in ("POST", "PATCH"):
                 try:
@@ -313,7 +440,9 @@ class Handler(BaseHTTPRequestHandler):
                 return self.respond(200, {"name": "AGY", "version": 1, "roots": list(map(str, gateway.roots)),
                                           "defaultModel": gateway.default_model, "conversationScope": "gateway"})
             if self.command == "GET" and path == "/v1/models":
-                return self.respond(200, {"models": gateway.models()})
+                return self.respond(200, {"models": gateway.models(refresh=query.get("refresh") == ["1"])})
+            if self.command == "GET" and path == "/v1/limits":
+                return self.respond(200, gateway.limits(refresh=query.get("refresh") == ["1"]))
             if path == "/v1/sessions":
                 if self.command == "GET":
                     sessions = [{k: v for k, v in s.items() if k != "messages"} for s in gateway.sessions()]
@@ -332,6 +461,8 @@ class Handler(BaseHTTPRequestHandler):
                 if self.command == "POST" and action == "stop":
                     return self.respond(200, gateway.stop(sid))
                 if self.command == "PATCH" and action is None:
+                    if "model" in body:
+                        return self.respond(200, gateway.set_model(sid, body["model"]))
                     return self.respond(200, gateway.rename(sid, body.get("name")))
                 if self.command == "DELETE" and action is None:
                     gateway.delete(sid)

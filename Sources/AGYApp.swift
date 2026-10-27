@@ -63,6 +63,8 @@ struct AGYConnection: View {
 struct AGYChat: View {
     @EnvironmentObject private var store: AGYStore
     @State private var showConfiguration = false
+    @State private var attachmentPicker: AGYAttachmentPicker?
+    @State private var pickerContext = UUID()
     @FocusState private var composerFocused: Bool
     var body: some View {
         NavigationStack {
@@ -80,7 +82,11 @@ struct AGYChat: View {
                             }.padding(.vertical, 36)
                         }
                         ForEach(store.selected?.messages ?? []) { message in
-                            if !message.text.isEmpty { NativeMessageRow(message: message.rendered, streaming: message.id == store.selected?.messages?.last?.id && store.selected?.running == true) }
+                            if !message.text.isEmpty || message.attachments?.isEmpty == false { NativeMessageRow(message: message.rendered, streaming: message.id == store.selected?.messages?.last?.id && store.selected?.running == true) }
+                            ForEach(message.attachments ?? []) { item in
+                                Label("\(item.name) · \(ByteCountFormatter.string(fromByteCount: Int64(item.size), countStyle: .file))", systemImage: item.mime.hasPrefix("image/") ? "photo" : "doc")
+                                    .font(.callout).padding(12).background(NativeTheme.surface, in: RoundedRectangle(cornerRadius: 12))
+                            }
                             ForEach(message.tools ?? []) { tool in
                                 DisclosureGroup {
                                     if tool.parameters != .object([:]) { Text(tool.parameters.pretty).font(.system(.caption, design: .monospaced)).textSelection(.enabled) }
@@ -115,10 +121,44 @@ struct AGYChat: View {
                 ToolbarItem(placement: .topBarTrailing) { Button { store.newConversation() } label: { Image(systemName: "square.and.pencil").frame(width: 36, height: 36) }.accessibilityLabel("新建对话").disabled(store.busy || store.pending != nil) }
             }
             .sheet(isPresented: $showConfiguration) { AGYConfiguration() }
+            .sheet(item: $attachmentPicker) { picker in
+                if picker == .photos {
+                    NativePhotoPicker(limit: max(1, 8 - store.attachments.count)) { results in
+                        let context = pickerContext; attachmentPicker = nil
+                        Task { await store.importPhotos(results, context: context) }
+                    }
+                } else {
+                    NativeDocumentPicker { urls in
+                        let context = pickerContext; attachmentPicker = nil
+                        Task { await store.importFiles(urls, context: context) }
+                    }
+                }
+            }
         }
     }
     private var composer: some View {
         VStack(alignment: .leading, spacing: 10) {
+            if !store.attachments.isEmpty {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        ForEach(store.attachments) { item in
+                            HStack(spacing: 8) {
+                                if item.imported.mime.hasPrefix("image/"), let image = UIImage(data: item.imported.data) {
+                                    Image(uiImage: image).resizable().scaledToFill().frame(width: 44, height: 44).clipShape(RoundedRectangle(cornerRadius: 8))
+                                } else { Image(systemName: "doc").frame(width: 28) }
+                                VStack(alignment: .leading, spacing: 3) {
+                                    Text(item.imported.name).font(.caption).lineLimit(1)
+                                    Text(ByteCountFormatter.string(fromByteCount: Int64(item.imported.data.count), countStyle: .file)).font(.caption2).foregroundStyle(.secondary)
+                                }.frame(width: 110, alignment: .leading)
+                                Button { store.attachments.removeAll { $0.id == item.id } } label: { Image(systemName: "xmark.circle.fill").frame(width: 36, height: 44) }.disabled(store.busy).accessibilityLabel("移除 \(item.imported.name)")
+                            }.padding(8).background(NativeTheme.surface, in: RoundedRectangle(cornerRadius: 12))
+                        }
+                    }
+                }.frame(height: 64)
+            }
+            if store.importing || !store.uploadProgress.isEmpty {
+                HStack { ProgressView().controlSize(.small); Text(store.importing ? "正在读取附件…" : store.uploadProgress).font(.caption).lineLimit(2) }
+            }
             HStack(spacing: 8) {
                 Circle().fill(store.selected?.running == true ? .orange : NativeTheme.accent).frame(width: 6, height: 6)
                 Text(store.connection).font(.caption).foregroundStyle(.secondary)
@@ -126,6 +166,11 @@ struct AGYChat: View {
                 Button { showConfiguration = true } label: { Text(store.models.first(where: { $0.id == store.model })?.name ?? "选择模型").lineLimit(1).font(.caption) }
             }
             HStack(alignment: .bottom, spacing: 12) {
+                Menu {
+                    Button("照片图库", systemImage: "photo.on.rectangle") { pickerContext = store.attachmentContext; attachmentPicker = .photos }
+                    Button("选择文件", systemImage: "doc") { pickerContext = store.attachmentContext; attachmentPicker = .files }
+                } label: { Image(systemName: "plus").frame(width: 36, height: 44) }
+                    .disabled(store.busy || store.importing || store.pending != nil || store.attachments.count >= 8).accessibilityLabel("添加照片或文件")
                 TextField("发送消息…", text: $store.draft, axis: .vertical).lineLimit(1...6).focused($composerFocused).padding(.vertical, 9)
                 if store.selected?.running == true {
                     Button { Task { await store.stop() } } label: { Image(systemName: "stop.fill").frame(width: 44, height: 44).background(NativeTheme.accent, in: Circle()).foregroundStyle(NativeTheme.onAccent) }.accessibilityLabel("停止任务")
@@ -140,21 +185,30 @@ struct AGYChat: View {
             .onChange(of: store.draft) { _, _ in store.saveDraft() }
     }
 }
+enum AGYAttachmentPicker: String, Identifiable { case photos, files; var id: String { rawValue } }
 struct AGYConfiguration: View {
     @EnvironmentObject private var store: AGYStore
     @Environment(\.dismiss) private var dismiss
     var body: some View {
         NavigationStack {
             Form {
-                Section("模型") { Picker("模型", selection: $store.model) { ForEach(store.models) { Text($0.name).tag($0.id) } }.pickerStyle(.inline) }
+                Section("模型") {
+                    Picker("模型", selection: Binding(get: { store.model }, set: { value in Task { await store.setModel(value) } })) {
+                        ForEach(Array(Set(store.models.map(\.family))).sorted(), id: \.self) { family in
+                            Section(family) { ForEach(store.models.filter { $0.family == family }) { Text($0.name).tag($0.id) } }
+                        }
+                    }.pickerStyle(.inline).disabled(store.busy || store.selected?.running == true)
+                    Button { Task { await store.refreshModels() } } label: { HStack { Text("刷新可用模型"); if store.modelsLoading { ProgressView() } } }.disabled(store.modelsLoading)
+                }
                 Section("工作空间") {
                     Picker("目录", selection: $store.cwd) { ForEach(store.roots, id: \.self) { Text($0).tag($0) } }
                     Picker("执行方式", selection: $store.mode) { Text("先做计划").tag("plan"); Text("允许编辑文件").tag("accept-edits") }
                     Text("计划模式用于分析。允许编辑文件后，AGY 可在服务器工作目录修改文件；需要额外批准的操作可能被无头 CLI 拒绝。").font(.footnote).foregroundStyle(.secondary)
-                }
-                if store.selected != nil { Section { Text("这些选项在新建会话时设置。要更换模型或工作目录，请新建对话。").font(.footnote) } }
-            }.disabled(store.selected != nil || store.busy).navigationTitle("对话配置").navigationBarTitleDisplayMode(.inline)
+                }.disabled(store.selected != nil || store.busy)
+                if store.selected != nil { Section { Text("任务结束后可以切换模型，已有对话会保留。工作目录与执行方式在新建会话时设置。").font(.footnote) } }
+            }.navigationTitle("对话配置").navigationBarTitleDisplayMode(.inline)
                 .toolbar { ToolbarItem(placement: .confirmationAction) { Button("完成") { dismiss() } } }
+                .task { await store.refreshModels() }
         }
     }
 }
@@ -203,6 +257,7 @@ struct AGYSettings: View {
                     LabeledContent("状态", value: store.connection)
                     ForEach(store.roots, id: \.self) { Text($0).font(.caption).textSelection(.enabled) }
                 }
+                Section { NavigationLink { AGYLimitsView() } label: { Label("账户额度", systemImage: "chart.bar") } }
                 Section("关于") {
                     LabeledContent("版本", value: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "")
                     Text("独立的原生 AGY 客户端，沿用 Pi iPhone 的聊天体验。Google 登录与任务运行在服务器上完成。").font(.footnote)
