@@ -95,7 +95,7 @@ final class AGYRedirectPolicy: NSObject, URLSessionTaskDelegate {
         self.credentials = credentials
         let config = URLSessionConfiguration.ephemeral
         config.timeoutIntervalForRequest = 65
-        config.timeoutIntervalForResource = 120
+        config.timeoutIntervalForResource = 600
         config.httpCookieStorage = nil
         config.requestCachePolicy = .reloadIgnoringLocalCacheData
         session = URLSession(configuration: config, delegate: policy, delegateQueue: nil)

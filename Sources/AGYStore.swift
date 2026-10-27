@@ -111,13 +111,14 @@ struct AGYDraftAttachment: Identifiable {
     }
     func send() async {
         guard canSend, let api else { return }
+        let textToSend = draft
         busy = true; error = nil
-        let account = epoch
-        defer { if epoch == account { busy = false } }
+        let account = epoch, selection = selectionEpoch
+        defer { if epoch == account, selection == selectionEpoch { busy = false } }
         do {
             if selected == nil {
                 let s: AGYSession = try await api.json("sessions", method: "POST", body: .object(["cwd": .string(cwd), "model": .string(model), "mode": .string(mode)]))
-                guard epoch == account else { return }
+                guard epoch == account, selection == selectionEpoch else { return }
                 selected = s
             }
             guard let id = selected?.id else { return }
@@ -125,12 +126,12 @@ struct AGYDraftAttachment: Identifiable {
                 if attachments[i].uploaded == nil {
                     uploadProgress = "正在上传 \(i + 1)/\(attachments.count)：\(attachments[i].imported.name)"
                     let uploaded = try await api.upload(attachments[i].imported, sessionID: id)
-                    guard epoch == account, selected?.id == id else { return }
+                    guard epoch == account, selection == selectionEpoch, selected?.id == id else { return }
                     attachments[i].uploaded = uploaded
                 }
             }
             uploadProgress = ""
-            let p = PendingSend(sessionID: id, requestID: UUID().uuidString.lowercased(), text: draft, attachments: attachments.compactMap { $0.uploaded?.id })
+            let p = PendingSend(sessionID: id, requestID: UUID().uuidString.lowercased(), text: textToSend, attachments: attachments.compactMap { $0.uploaded?.id })
             guard SecureStore.write(try JSONEncoder().encode(p), account: "pending-send") else { throw AGYError.message("无法保存发送编号，消息尚未发送。") }
             pending = p
             try await submit(p, api: api, account: account)
