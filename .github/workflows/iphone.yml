@@ -21,6 +21,10 @@ jobs:
           mkdir -p build
           xcrun swiftc -parse-as-library Sources/NativeCore.swift Tests/NativeCoreTests.swift -o build/native-core
           build/native-core
+      - name: Test document and photo attachment imports
+        run: |
+          xcrun swiftc -parse-as-library Sources/NativeAttachmentReader.swift Sources/NativePhotoEncoding.swift Tests/NativeAttachmentTests.swift -o build/native-attachments
+          build/native-attachments
       - name: Generate Xcode project
         run: python3 scripts/generate-project.py
       - name: Archive and verify physical iPhone IPA
