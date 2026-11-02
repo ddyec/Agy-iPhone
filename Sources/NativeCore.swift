@@ -86,6 +86,9 @@ struct ChatMessage: Codable, Identifiable, Equatable {
             guard case .object(var fields) = block else { return block }
             if block["type"].string == "image" {
                 if block["data"].string.isEmpty { fields["data"] = block["source"]["data"] }
+                if block["url"].string.isEmpty {
+                    fields["url"] = !block["source"]["url"].string.isEmpty ? block["source"]["url"] : block["image_url"]["url"]
+                }
             } else if block["type"].string == "toolCall" {
                 if block["name"].string.isEmpty { fields["name"] = block["toolName"] }
                 if block["arguments"] == .null { fields["arguments"] = block["input"] }
