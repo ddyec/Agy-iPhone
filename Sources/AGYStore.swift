@@ -103,7 +103,7 @@ struct AGYDraftAttachment: Identifiable {
                 catch {
                     guard epoch == token else { return }
                     cwd = roots.first ?? ""
-                    error = "上次选择的项目目录暂不可用，已返回工作区。"
+                    self.error = "上次选择的项目目录暂不可用，已返回工作区。"
                 }
             }
             guard epoch == token else { return }
