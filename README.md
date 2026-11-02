@@ -1,6 +1,10 @@
-# AGY iPhone 1.3.1 · 设置记忆与文件引用
+# AGY iPhone 1.4.0 · 锁屏与灵动岛任务活动
 
-本版补齐模型（含思考强度）、审批策略、执行方式及工作区的本机记忆，按服务器和账号隔离保存。新对话使用上次主动修改的配置；查看旧会话不会改写默认值。模型不可用时回退到服务器可用模型，工作区超出允许范围或连接时不可访问时返回默认工作区。此修复需安装新版客户端，服务器升级不能替代。
+本版新增任务实时活动：显示任务状态、时长、简短进展与待审批提示，点按打开对应会话。默认隐藏任务内容，设置页可开启预览或关闭实时活动。包含独立 WidgetKit 扩展。
+
+当前为本地 ActivityKit 版本：App 切到后台立即显示“待同步”，重新打开后获取真实状态；不含 APNs 推送、后台常驻或后台完成通知。重新签名安装时必须保留并签署 `AGYLiveActivity.appex` 扩展；功能是否可用仍以设备和签名工具为准。
+
+前版已补齐模型（含思考强度）、审批策略、执行方式及工作区的本机记忆，按服务器和账号隔离保存。新对话使用上次主动修改的配置；查看旧会话不会改写默认值。模型不可用时回退到服务器可用模型，工作区超出允许范围或连接时不可访问时返回默认工作区。此修复需安装新版客户端，服务器升级不能替代。
 
 原生“文件”页：浏览工作文件、从文件/相册上传、下载并预览产物、保存到 iPhone 文件 App。输入 `@` 或点击文件行的 `@`，可引用文件或整个文件夹。手机只显示相对路径，不需要输入服务器路径。目录引用保留整个文件夹的路径，AGY 按需读取，不预先展开全部内容。
 
@@ -10,7 +14,7 @@
 
 # AGY for iPhone
 
-独立的 SwiftUI 原生 Antigravity CLI 客户端，沿用 [Pi iPhone](https://github.com/ddyec/Pi-iPhone) 的消息展示与界面基础。iOS 17+、仅 iPhone，SVG 原生预览使用固定 SwiftDraw 0.29.0。Bundle ID：`com.ddyec.agy-iphone`，可与 Pi 同时安装。当前源码版本 1.3.1 / build 6。
+独立的 SwiftUI 原生 Antigravity CLI 客户端，沿用 [Pi iPhone](https://github.com/ddyec/Pi-iPhone) 的消息展示与界面基础。iOS 17+、仅 iPhone，SVG 原生预览使用固定 SwiftDraw 0.29.0。Bundle ID：`com.ddyec.agy-iphone`，可与 Pi 同时安装。当前源码版本 1.4.0 / build 7。
 
 App 图标、登录页、欢迎页和消息标识使用 [Google 官方 Antigravity Press Assets](https://antigravity.google/press) 全彩原图；来源与打包说明见 `Brand/README.md`。
 

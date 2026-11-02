@@ -22,4 +22,6 @@ xcrun swiftc -parse-as-library Sources/AGYFilePresentation.swift Tests/AGYFilePr
 build/files
 xcrun swiftc -parse-as-library Sources/AGYConfigurationMemory.swift Tests/AGYConfigurationMemoryTests.swift -o build/configuration
 build/configuration
+xcrun swiftc -parse-as-library Shared/AGYActivityState.swift Tests/AGYActivityPolicyTests.swift -o build/activity
+build/activity
 echo "Local executable checks passed; use bash scripts/package.sh for the separate iPhone archive. No Actions are invoked."

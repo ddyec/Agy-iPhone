@@ -7,6 +7,7 @@ import SwiftUI
         WindowGroup {
             AGYRoot().environmentObject(store).tint(NativeTheme.accent)
                 .task { await store.restore() }
+                .onOpenURL { url in Task { await store.openActivity(url) } }
                 .onChange(of: phase) { _, value in store.scene(value) }
         }
     }
@@ -371,6 +372,7 @@ struct AGYSettings: View {
                     ForEach(store.roots, id: \.self) { Text($0).font(.caption).textSelection(.enabled) }
                 }
                 Section { NavigationLink { AGYLimitsView() } label: { Label("账户额度", systemImage: "chart.bar") } }
+                AGYLiveActivitySettings(activity: store.liveActivity)
                 Section("输出展示") {
                     Picker("展示方式", selection: $settingsOutputMode) { ForEach(NativeOutputMode.allCases) { Text($0.title).tag($0.rawValue) } }
                     Text("步骤摘要和结论优先保留真实过程，随时可以展开。").font(.footnote).foregroundStyle(.secondary)
@@ -388,5 +390,21 @@ struct AGYSettings: View {
                 Button("断开连接", role: .destructive) { store.disconnect() }
             } message: { Text("服务器上的会话与正在执行的任务会保留。") }
         }
+    }
+}
+
+struct AGYLiveActivitySettings: View {
+    @ObservedObject var activity: AGYLiveActivity
+    @EnvironmentObject private var store: AGYStore
+    var body: some View {
+        Section("锁屏与灵动岛") {
+            Toggle("任务实时活动", isOn: $activity.enabled)
+            Toggle("显示任务标题和进展", isOn: $activity.previews).disabled(!activity.enabled)
+            if !activity.available { Text("请在 iPhone 设置中允许 AGY 的实时活动。").font(.footnote).foregroundStyle(.secondary) }
+            Text("跟随当前任务显示进展和审批状态。切到后台会标为待同步，点按返回会话更新；当前版本不支持后台推送。默认隐藏任务内容。").font(.footnote).foregroundStyle(.secondary)
+            if let issue = activity.issue { Text(issue).font(.footnote).foregroundStyle(.orange) }
+        }
+        .onChange(of: activity.enabled) { _, _ in store.updateLiveActivity() }
+        .onChange(of: activity.previews) { _, _ in store.updateLiveActivity() }
     }
 }

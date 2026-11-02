@@ -6,6 +6,17 @@
 	<true/>
 	<key>CFBundleDisplayName</key>
 	<string>AGY</string>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>com.ddyec.agy-iphone.session</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>agy</string>
+			</array>
+		</dict>
+	</array>
 	<key>NSAppTransportSecurity</key>
 	<dict>
 		<key>NSAllowsLocalNetworking</key>
@@ -17,6 +28,8 @@
 	<string>录制附加到 AGY 对话的视频声音。</string>
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>选择照片并附加到 AGY 对话。</string>
+	<key>NSSupportsLiveActivities</key>
+	<true/>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>

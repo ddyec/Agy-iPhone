@@ -12,7 +12,7 @@ struct AGYDraftAttachment: Identifiable {
     @Published var connected = false
     @Published var busy = false
     @Published var sessions: [AGYSession] = []
-    @Published var selected: AGYSession?
+    @Published var selected: AGYSession? { didSet { updateLiveActivity() } }
     @Published var models: [AGYModel] = []
     @Published var families: [AGYModelFamily] = []
     @Published var approvalMode = "review"
@@ -39,6 +39,7 @@ struct AGYDraftAttachment: Identifiable {
     private(set) var attachmentContext = UUID()
     private(set) var api: AGYAPI?
     let cache = NativeCache()
+    let liveActivity = AGYLiveActivity()
     private var streamTask: Task<Void, Never>?
     private var epoch = UUID()
     private var selectionEpoch = UUID()
@@ -68,6 +69,18 @@ struct AGYDraftAttachment: Identifiable {
         sessions = cache.read("sessions", as: [AGYSession].self) ?? []
         if let data = SecureStore.read("pending-send") { pending = try? JSONDecoder().decode(PendingSend.self, from: data) }
     }
+    var liveScope: String { AGYLiveActivity.scope(configurationScope) }
+    func updateLiveActivity() {
+        guard connected, let selected else { liveActivity.pause(); return }
+        liveActivity.update(selected, scope: liveScope, foreground: foreground)
+    }
+    func openActivity(_ url: URL) async {
+        if !connected { await restore() }
+        guard connected, let id = AGYActivityPolicy.session(from: url, scope: liveScope) else { return }
+        guard pending == nil || pending?.sessionID == id else { error = "请先核对待确认消息，再打开其他会话。"; return }
+        tab = 0
+        await select(id)
+    }
     func restore() async {
         guard let data = SecureStore.read("connection"), let c = try? JSONDecoder().decode(AGYCredentials.self, from: data) else { return }
         await connect(c)
@@ -89,6 +102,7 @@ struct AGYDraftAttachment: Identifiable {
             gatewayReady = status.capabilities?.nativeApprovals == true && status.capabilities?.separateEffort == true
             let profile = credentials.url.absoluteString + "#" + (status.accountProfile ?? "legacy")
             if UserDefaults.standard.string(forKey: "activeAccountProfile") != profile {
+                liveActivity.clear()
                 cache.clear(); sessions = []; selected = nil; draft = ""; attachments = []; references = []; pending = nil; limits = nil
                 SecureStore.delete("pending-send"); attachmentContext = UUID()
                 UserDefaults.standard.removeObject(forKey: "draft")
@@ -112,7 +126,7 @@ struct AGYDraftAttachment: Identifiable {
             if !gatewayReady { error = "请先部署本包新版后端并完成独立账号登录，才能使用模型/思考强度与原生审批。历史仍可查看。" }
             await reload()
             if let pending { await select(pending.sessionID) }
-            else if let id = selected?.id { await select(id) }
+            else if let id = selected?.id ?? liveActivity.resumeSession(scope: liveScope) { await select(id) }
         } catch { if epoch == token { self.error = error.localizedDescription; connection = "连接失败" } }
     }
     func reload() async {
@@ -354,7 +368,7 @@ struct AGYDraftAttachment: Identifiable {
         }
     }
     func scene(_ phase: ScenePhase) {
-        if phase == .background { foreground = false; streamTask?.cancel(); connection = "后台已暂停同步" }
+        if phase == .background { foreground = false; liveActivity.pause(); streamTask?.cancel(); connection = "后台已暂停同步" }
         if phase == .active { foreground = true; if let id = selected?.id { Task { await select(id) } } else if connected { Task { await reload() } } }
     }
     func saveDraft() {
@@ -362,6 +376,7 @@ struct AGYDraftAttachment: Identifiable {
         cache.write(references, key: "references-" + draftKey)
     }
     func disconnect() {
+        liveActivity.clear()
         epoch = UUID(); selectionEpoch = UUID(); streamTask?.cancel(); api?.invalidate(); api = nil
         SecureStore.delete("connection"); SecureStore.delete("pending-send"); pending = nil
         connected = false; busy = false; sessions = []; selected = nil; draft = ""; saveDraft(); error = nil; connection = "尚未连接"
