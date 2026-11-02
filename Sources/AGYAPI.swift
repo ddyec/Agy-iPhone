@@ -1,91 +1,18 @@
 import Foundation
 import UIKit
 
-struct AGYModel: Codable, Identifiable, Hashable {
-    let id: String
-    let name: String
-    var family: String { name.components(separatedBy: " (").first ?? name }
-}
-struct AGYAttachment: Codable, Identifiable {
-    let id: String
-    let name: String
-    let mime: String
-    let size: Int
-}
-struct AGYLimits: Decodable {
-    let fetchedAt: Double
-    let source: String
-    let groups: [AGYLimitGroup]
-}
-struct AGYLimitGroup: Decodable, Identifiable {
-    let name: String
-    var description: String?
-    let buckets: [AGYLimitBucket]
-    var id: String { name }
-}
-struct AGYLimitBucket: Decodable, Identifiable {
-    let id: String
-    let name: String
-    var remaining_fraction: Double?
-    var reset_time: String?
-    var window: String?
-    var reset: Date? { reset_time.flatMap { ISO8601DateFormatter().date(from: $0) } }
-    var title: String { window == "5h" ? "5 小时额度" : window == "weekly" ? "每周额度" : name }
-}
-struct AGYTool: Codable, Identifiable {
-    let id: String
-    let name: String
-    let state: String
-    let parameters: WireValue
-    let output: String
-}
-struct AGYMessage: Codable, Identifiable {
-    let id: String
-    let role: String
-    let text: String
-    var tools: [AGYTool]?
-    var attachments: [AGYAttachment]?
-    var rendered: ChatMessage { ChatMessage(id: id, value: .object(["role": .string(role), "content": .string(text)])) }
-}
-struct AGYSession: Codable, Identifiable {
-    let id: String
-    var name: String
-    let cwd: String
-    let model: String
-    let mode: String
-    let modified: Double
-    let running: Bool
-    let conversationID: String
-    let error: String
-    let revision: Int
-    var messages: [AGYMessage]?
-}
-struct AGYStatus: Decodable {
-    let name: String
-    let version: Int
-    let roots: [String]
-    let defaultModel: String
-}
-struct AGYModels: Decodable { let models: [AGYModel] }
-struct AGYSessions: Decodable { let sessions: [AGYSession] }
-struct AGYCredentials: Codable {
-    let url: URL
-    let token: String
-    static func validated(_ rawURL: String, token: String) throws -> Self {
-        guard let url = URL(string: rawURL.trimmingCharacters(in: .whitespacesAndNewlines)),
-              url.scheme == "https", url.host != nil, url.user == nil, url.password == nil,
-              url.query == nil, url.fragment == nil, ["", "/"].contains(url.path), token.count >= 32,
-              !token.contains("\n"), !token.contains("\r") else { throw AGYError.message("请输入 HTTPS 服务器地址和完整连接密钥。") }
-        return Self(url: url, token: token)
-    }
-}
-enum AGYError: LocalizedError {
-    case message(String)
-    var errorDescription: String? { if case .message(let text) = self { return text }; return nil }
-}
 final class AGYRedirectPolicy: NSObject, URLSessionTaskDelegate {
     func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
                     newRequest request: URLRequest, completionHandler: @escaping (URLRequest?) -> Void) { completionHandler(nil) }
+}
+final class AGYExternalRedirectPolicy: NSObject, URLSessionTaskDelegate {
+    func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
+                    newRequest request: URLRequest, completionHandler: @escaping (URLRequest?) -> Void) {
+        guard let url = request.url, url.scheme == "https", url.user == nil, url.password == nil else { completionHandler(nil); return }
+        var clean = request
+        clean.setValue(nil, forHTTPHeaderField: "Authorization"); clean.setValue(nil, forHTTPHeaderField: "Cookie")
+        completionHandler(clean)
+    }
 }
 @MainActor final class AGYAPI {
     var credentials: AGYCredentials
@@ -110,7 +37,8 @@ final class AGYRedirectPolicy: NSObject, URLSessionTaskDelegate {
         // Match the mobile client identity used by the existing Pi app so the
         // origin's Browser Integrity Check accepts native API requests.
         let os = UIDevice.current.systemVersion.replacingOccurrences(of: ".", with: "_")
-        request.setValue("Mozilla/5.0 (iPhone; CPU iPhone OS \(os) like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148 AGY-iPhone/1.0.1", forHTTPHeaderField: "User-Agent")
+        let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.3.1"
+        request.setValue("Mozilla/5.0 (iPhone; CPU iPhone OS \(os) like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148 AGY-iPhone/\(version)", forHTTPHeaderField: "User-Agent")
         if let body { request.httpBody = try JSONEncoder().encode(body); request.setValue("application/json", forHTTPHeaderField: "Content-Type") }
         return request
     }
@@ -134,6 +62,33 @@ final class AGYRedirectPolicy: NSObject, URLSessionTaskDelegate {
         let (data, response) = try await session.upload(for: req, from: attachment.data)
         try validate(response, data: data)
         return try JSONDecoder().decode(AGYAttachment.self, from: data)
+    }
+    func download(_ path: String, sessionID: String, name: String? = nil) async throws -> URL {
+        guard !sessionID.isEmpty else { throw AGYError.message("请先选择会话") }
+        var req = try request("sessions/\(sessionID)/files", query: ["path": path])
+        req.setValue("*/*", forHTTPHeaderField: "Accept")
+        let (temporary, response) = try await session.download(for: req)
+        try validate(response)
+        return try protect(temporary, name: NativeFileRules.safeFilename(name ?? path))
+    }
+    private func protect(_ temporary: URL, name: String) throws -> URL {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("AGYPreviews/\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let target = folder.appendingPathComponent(name)
+        try FileManager.default.moveItem(at: temporary, to: target)
+        try FileManager.default.setAttributes([.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication], ofItemAtPath: target.path)
+        return target
+    }
+    func downloadExternal(_ url: URL) async throws -> URL {
+        guard NativeDownloadLinks.isExternalFile(url) else { throw AGYError.message("不支持此下载地址") }
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.httpCookieStorage = nil; configuration.urlCredentialStorage = nil; configuration.httpShouldSetCookies = false
+        let external = URLSession(configuration: configuration, delegate: AGYExternalRedirectPolicy(), delegateQueue: nil)
+        defer { external.finishTasksAndInvalidate() }
+        // No gateway authorization header is ever added to external downloads.
+        let (temporary, response) = try await external.download(from: url)
+        try validate(response)
+        return try protect(temporary, name: NativeFileRules.safeFilename(response.suggestedFilename ?? url.lastPathComponent))
     }
     func events(_ id: String, receive: @escaping (AGYSession) -> Void) async throws {
         var req = try request("sessions/\(id)/events")

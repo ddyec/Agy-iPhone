@@ -13,8 +13,13 @@ import subprocess
 import threading
 import time
 import uuid
+import tempfile
+import mimetypes
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import urlsplit, parse_qs
+from urllib.parse import urlsplit, parse_qs, quote
+import catalog
+import profiles
+from approvals import ApprovalBridge
 
 MAX_BODY = 256 * 1024
 MAX_FILE = 25 * 1024 * 1024
@@ -28,7 +33,7 @@ class Failure(Exception):
 
 
 class Gateway:
-    def __init__(self, directory, key, binary, roots, default_model="", command_prefix=None):
+    def __init__(self, directory, key, binary, roots, default_model="", command_prefix=None, profile_home=None):
         self.directory = Path(directory)
         self.directory.mkdir(parents=True, exist_ok=True, mode=0o700)
         self.key = key
@@ -36,6 +41,9 @@ class Gateway:
             raise ValueError("Gateway key must contain at least 32 characters")
         self.binary = binary
         self.prefix = command_prefix or []
+        self.profile_home = Path(profile_home).resolve() if profile_home else None
+        self.account_profile = profiles.prepare(self.profile_home) if self.profile_home else "legacy"
+        self.env = profiles.environment(self.profile_home)
         self.roots = [Path(r).resolve(strict=True) for r in roots]
         self.default_model = default_model
         self.lock = threading.RLock()
@@ -51,10 +59,16 @@ class Gateway:
         self.db.commit()
         self.models_cache = None
         self.limits_cache = None
+        self.review = None
+        self.review_directory = None
+        if self.profile_home:
+            self.review_directory = tempfile.TemporaryDirectory(prefix="agy-review-")
+            self.review = ApprovalBridge(Path(self.review_directory.name)/"gate.sock", self.approvals_changed)
         # Never resubmit an admitted prompt after a crash/restart.
         for s in self.sessions():
             if s["running"]:
                 s["running"] = False
+                s["approvals"] = []
                 s["error"] = "服务器已重启。请检查回复后再发送，未自动重试任务。"
                 self.save(s)
 
@@ -69,7 +83,13 @@ class Gateway:
             row = self.db.execute("SELECT data FROM sessions WHERE id=?", (sid,)).fetchone()
             if not row:
                 raise Failure(404, "会话不存在")
-            return json.loads(row[0])
+            value = json.loads(row[0])
+            effort = value["model"].rsplit("-", 1)[-1]
+            value.setdefault("effort", effort if effort in catalog.EFFORTS else "")
+            value.setdefault("baseModel", value["model"][:-(len(effort)+1)] if value["effort"] else value["model"])
+            value.setdefault("approvalMode", "legacy")
+            value.setdefault("approvals", [])
+            return value
 
     def sessions(self):
         with self.lock:
@@ -82,6 +102,9 @@ class Gateway:
             raise Failure(400, "工作目录不存在")
         if not p.is_dir() or not any(p == r or r in p.parents for r in self.roots):
             raise Failure(403, "工作目录不在允许范围内")
+        if any(part in {".git", ".gemini", ".ssh", ".aws", ".codex", ".agents"}
+               for root in self.roots if p == root or root in p.parents for part in p.relative_to(root).parts):
+            raise Failure(403, "不能将凭据或内部配置目录作为工作区")
         return str(p)
 
     def models(self, refresh=False):
@@ -89,7 +112,7 @@ class Gateway:
             if not refresh and self.models_cache and time.monotonic() - self.models_cache[0] < 300:
                 return self.models_cache[1]
         try:
-            result = subprocess.run(self.prefix + [self.binary, "models"], capture_output=True, text=True, timeout=40, cwd=self.roots[0])
+            result = subprocess.run(self.prefix + [self.binary, "models"], capture_output=True, text=True, timeout=40, cwd=self.roots[0], env=self.env)
         except (OSError, subprocess.TimeoutExpired):
             raise Failure(502, "无法获取 AGY 模型，请检查服务器登录和网络")
         if result.returncode:
@@ -112,7 +135,7 @@ class Gateway:
                 return self.limits_cache[1]
         try:
             p = subprocess.run(self.prefix + [self.binary, "-p", "/usage", "--output-format", "json"],
-                               capture_output=True, text=True, timeout=40, cwd=self.roots[0])
+                               capture_output=True, text=True, timeout=40, cwd=self.roots[0], env=self.env)
             result = json.loads(p.stdout)
             data = result.get("command", {}).get("data", {})
             if p.returncode or result.get("status") != "SUCCESS" or not isinstance(data.get("groups"), list):
@@ -127,7 +150,7 @@ class Gateway:
 
     @staticmethod
     def attachment_info(a):
-        return {k: a[k] for k in ("id", "name", "mime", "size")}
+        return {k: a[k] for k in ("id", "name", "mime", "size", "path")}
 
     def attachment(self, sid, aid):
         with self.lock:
@@ -196,16 +219,40 @@ class Gateway:
 
     def create(self, body):
         cwd = self.workspace(body.get("cwd") or str(self.roots[0]))
-        model = body.get("model") or self.default_model or self.models()[0]["id"]
-        if model not in {m["id"] for m in self.models()}:
-            raise Failure(400, "模型不可用")
+        model, base, effort = self.resolve_configuration(body)
         mode = body.get("mode", "plan")
         if mode not in ("plan", "accept-edits"):
             raise Failure(400, "执行模式无效")
+        permission = body.get("approvalMode", "legacy")
+        if permission not in ("review", "turbo", "legacy"):
+            raise Failure(400, "审批策略无效")
+        if permission != "legacy" and self.review is None:
+            raise Failure(503, "请先按说明启用独立账号配置和新版审批后端")
         session = {"id": str(uuid.uuid4()), "name": "新会话", "cwd": cwd, "model": model, "mode": mode,
+                   "baseModel": base, "effort": effort, "approvalMode": permission, "approvals": [],
                    "modified": time.time(), "messages": [], "running": False, "conversationID": "", "error": "", "revision": 0}
         self.save(session)
         return session
+
+    def resolve_configuration(self, body, current=None):
+        model = body.get("baseModel") or body.get("model") or (current or {}).get("baseModel" if "effort" in body else "model") or self.default_model or self.models()[0]["id"]
+        try:
+            return catalog.resolve(self.models(), model, body.get("effort"))
+        except (ValueError, TypeError):
+            raise Failure(400, "模型或思考强度不可用，请刷新列表")
+
+    def approvals_changed(self, sid, records):
+        with self.lock:
+            try: s = self.get(sid)
+            except Failure: return
+            s["approvals"] = records
+            self.save(s)
+
+    def answer_approval(self, sid, rid, decision):
+        if not self.review: raise Failure(503, "审批后端未启用")
+        try: self.review.answer(sid, rid, decision)
+        except ValueError as error: raise Failure(409, str(error))
+        return self.get(sid)
 
     def submit(self, sid, body):
         prompt = body.get("text", "")
@@ -213,13 +260,18 @@ class Gateway:
         attachment_ids = body.get("attachments", [])
         if not isinstance(attachment_ids, list) or len(attachment_ids) > MAX_ATTACHMENTS or any(not isinstance(a, str) for a in attachment_ids) or len(set(attachment_ids)) != len(attachment_ids):
             raise Failure(400, "最多添加 8 个不同附件")
-        if not isinstance(prompt, str) or not (prompt.strip() or attachment_ids) or len(prompt.encode()) > 200 * 1024:
+        file_references = body.get("references", [])
+        if not isinstance(file_references, list) or len(file_references) > 8 or any(not isinstance(p, str) for p in file_references) or len(set(file_references)) != len(file_references):
+            raise Failure(400, "最多引用 8 个不同工作文件")
+        if not isinstance(prompt, str) or not (prompt.strip() or attachment_ids or file_references) or len(prompt.encode()) > 200 * 1024:
             raise Failure(400, "消息为空或过长")
         try:
             uuid.UUID(rid)
         except (ValueError, TypeError, AttributeError):
             raise Failure(400, "缺少有效请求编号")
         digest = hashlib.sha256((prompt + (json.dumps(attachment_ids) if attachment_ids else "")).encode()).hexdigest()
+        if file_references:
+            digest = hashlib.sha256((digest + json.dumps(file_references, ensure_ascii=False)).encode()).hexdigest()
         with self.lock:
             prior = self.db.execute("SELECT session,digest FROM requests WHERE id=?", (rid,)).fetchone()
             if prior:
@@ -233,14 +285,25 @@ class Gateway:
             attached = [self.attachment(sid, aid) for aid in attachment_ids]
             if sum(a["size"] for a in attached) > MAX_TOTAL:
                 raise Failure(413, "附件合计不能超过 50 MB")
-            references = "\n".join("- " + json.dumps(a["name"], ensure_ascii=False) + ": @" + a["path"] for a in attached)
+            referenced = []
+            for path in file_references:
+                is_directory = False
+                try:
+                    stream, name, size = self.open_file(sid, path, directory=True)
+                    is_directory = True
+                except Failure:
+                    stream, name, size = self.open_file(sid, path)
+                    with stream: pass
+                referenced.append({"id": path, "name": name, "path": path, "size": size,
+                                   "mime": "inode/directory" if is_directory else mimetypes.guess_type(name)[0] or "application/octet-stream"})
+            references = "\n".join(json.dumps({"name": a["name"], "path": a["path"], "type": "directory" if a["mime"] == "inode/directory" else "file"}, ensure_ascii=False) for a in attached + referenced)
             cli_prompt = prompt
-            if attached:
-                cli_prompt = (prompt or "请读取并分析这些附件。") + "\n\nUser-uploaded attachments (use the file/image reading tools to inspect their actual contents):\n" + references
-            s["messages"].append({"id": rid, "role": "user", "text": prompt, "attachments": [self.attachment_info(a) for a in attached]})
+            if attached or referenced:
+                cli_prompt = (prompt or "请查看这些引用的文件或文件夹。") + "\n\nReferenced files and directories (full paths identify the selected context; use reading tools as needed; directory references refer to the whole folder, not a preloaded archive):\n" + references
+            s["messages"].append({"id": rid, "role": "user", "text": prompt, "attachments": [self.attachment_info(a) for a in attached] + referenced})
             s["messages"].append({"id": str(uuid.uuid4()), "role": "assistant", "text": "", "tools": []})
             if s["name"] == "新会话":
-                s["name"] = prompt.strip()[:40] or attached[0]["name"][:40]
+                s["name"] = prompt.strip()[:40] or (attached + referenced)[0]["name"][:40]
             s["running"], s["error"], s["modified"] = True, "", time.time()
             # One transaction admits both the user message and its deduplication key.
             self.db.execute("INSERT INTO requests VALUES (?,?,?)", (rid, sid, digest))
@@ -264,12 +327,18 @@ class Gateway:
             if kind == "step_update":
                 step = event.get("step_update", {})
                 if step.get("step_type") == "agent_response":
-                    m["text"] += step.get("text_delta", "")
+                    idx = step.get("step_index", 0)
+                    parts = m.setdefault("steps", [])
+                    item = next((v for v in parts if v["index"] == idx), None)
+                    if item is None:
+                        item = {"index": idx, "text": ""}; parts.append(item)
+                    item["text"] += step.get("text_delta", "")
+                    m["text"] = item["text"]
                 if step.get("step_type") == "tool":
                     # Tool events may carry ACTIVE followed by DONE: replace by step identity.
                     info = step.get("tool_info", {})
                     tool = {"id": str(step.get("step_index", 0)), "name": step.get("tool_name") or info.get("name", "工具"),
-                            "state": step.get("state", ""), "parameters": info.get("parameters", {}), "output": str(info.get("output", ""))[:100000]}
+                            "state": step.get("state", ""), "parameters": info.get("parameters", {}), "output": str(info.get("output", ""))[:100000], "isError": bool(info.get("error"))}
                     tools = [t for t in m.setdefault("tools", []) if t["id"] != tool["id"]]
                     m["tools"] = tools + [tool]
             if kind == "result":
@@ -283,19 +352,28 @@ class Gateway:
             self.save(s)
 
     def run(self, sid, prompt):
-        process, terminal, failure = None, False, ""
+        process, terminal, failure, run_token = None, False, "", None
         try:
             s = self.get(sid)
             # stdin keeps the prompt out of process listings; no shell interpolation.
             args = self.prefix + [self.binary, "--input-format", "stream-json", "--output-format", "stream-json",
-                                  "--model", s["model"], "--mode", s["mode"], "--print-timeout", "30m"]
+                                  "--model", s["baseModel"], "--mode", s["mode"], "--print-timeout", "30m"]
+            if s["effort"]: args += ["--effort", s["effort"]]
+            env = self.env.copy()
+            if s["approvalMode"] != "legacy":
+                if self.review is None: raise Failure(503, "审批后端未启用")
+                run_token = self.review.begin(sid)
+                env.update(AGY_IPHONE_PERMISSION=s["approvalMode"], AGY_IPHONE_RUN_TOKEN=run_token,
+                           AGY_IPHONE_REVIEW_SOCKET=self.review.path)
+                args += ["--settings", json.dumps({"toolPermission": "always-proceed" if s["approvalMode"] == "turbo" else "request-review",
+                                                  "artifactReviewPolicy": "always-proceed", "enableTerminalSandbox": False})]
             if s["conversationID"]:
                 args += ["--conversation", s["conversationID"]]
             with self.lock:
                 if sid in self.stopping:
                     raise Failure(409, "任务已停止")
                 process = subprocess.Popen(args, cwd=s["cwd"], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                                           stderr=subprocess.DEVNULL, start_new_session=True)
+                                           stderr=subprocess.DEVNULL, start_new_session=True, env=env)
                 self.processes[sid] = process
             process.stdin.write((json.dumps({"event": "user", "message": {"content": prompt}}, ensure_ascii=False) + "\n").encode())
             process.stdin.close()
@@ -314,6 +392,7 @@ class Gateway:
         except Exception as error:
             failure = error.message if isinstance(error, Failure) else "AGY 执行中断，请检查会话后再试。"
         finally:
+            if run_token and self.review: self.review.finish(run_token)
             if process and process.poll() is None:
                 self.terminate(process)
             if process:
@@ -323,6 +402,7 @@ class Gateway:
             with self.lock:
                 s = self.get(sid)
                 s["running"] = False
+                s["approvals"] = []
                 s["modified"] = time.time()
                 if sid in self.stopping:
                     s["error"] = "任务已停止；已执行的操作不会自动撤销。"
@@ -350,6 +430,7 @@ class Gateway:
             if s["running"]:
                 self.stopping.add(sid)
             process = self.processes.get(sid)
+        if self.review: self.review.cancel(sid)
         if process:
             self.terminate(process)
         return self.get(sid)
@@ -364,15 +445,198 @@ class Gateway:
             return s
 
     def set_model(self, sid, model):
-        if not isinstance(model, str) or model not in {m["id"] for m in self.models()}:
-            raise Failure(400, "模型不可用，请刷新模型列表")
+        return self.configure(sid, {"model": model})
+
+    def configure(self, sid, body):
+        current = self.get(sid)
+        model, base, effort = self.resolve_configuration(body, current)
+        mode = body.get("mode", current["mode"])
+        permission = body.get("approvalMode", current["approvalMode"])
+        if mode not in ("plan", "accept-edits") or permission not in ("review", "turbo", "legacy"):
+            raise Failure(400, "执行方式或审批策略无效")
+        if permission != "legacy" and self.review is None:
+            raise Failure(503, "新版审批后端未启用")
         with self.lock:
             s = self.get(sid)
             if s["running"] or sid in self.active:
                 raise Failure(409, "请等待任务结束再切换模型")
             s["model"] = model
+            s.update(baseModel=base, effort=effort, mode=mode, approvalMode=permission)
             self.save(s)
             return s
+
+    def file_root(self, sid=None, scope="workspace", cwd=None):
+        session = self.get(sid) if sid else None
+        workspace = Path(self.workspace(session["cwd"] if session else cwd))
+        if scope == "workspace": return workspace
+        if not session: raise Failure(400, "请先选择会话")
+        if scope == "uploads": return workspace/".agy-uploads"/sid
+        if scope == "artifacts" and self.profile_home and session["conversationID"]:
+            try: uuid.UUID(session["conversationID"])
+            except (ValueError, TypeError, AttributeError): raise Failure(403, "会话产物标识无效")
+            return self.profile_home/".gemini/antigravity-cli/brain"/session["conversationID"]
+        if scope == "artifacts": return None
+        raise Failure(400, "文件区域无效")
+
+    def list_files(self, sid=None, scope="workspace", path="", cwd=None):
+        import stat
+        relative = Path(path)
+        if relative.is_absolute() or ".." in relative.parts or "\x00" in path:
+            raise Failure(403, "目录不在允许范围内")
+        root = self.file_root(sid, scope, cwd)
+        result = {"root": str(root) if root else "", "path": str(relative) if str(relative) != "." else "", "entries": []}
+        if root is None: return result
+        descriptors = []
+        try:
+            anchor = root
+            prefix = ()
+            if scope == "uploads":
+                anchor = Path(self.workspace(self.get(sid)["cwd"]))
+                prefix = (".agy-uploads", sid)
+            elif scope == "artifacts":
+                anchor = self.profile_home
+                prefix = (".gemini", "antigravity-cli", "brain", self.get(sid)["conversationID"])
+            if any(part in {".git", ".gemini", ".ssh", ".aws", ".codex", ".agents"} for part in relative.parts):
+                raise Failure(403, "不能访问凭据或内部配置目录")
+            fd = os.open(anchor, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW); descriptors.append(fd)
+            for part in prefix + relative.parts:
+                fd = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd); descriptors.append(fd)
+            names = {}
+            if scope == "uploads":
+                with self.lock:
+                    names = {a["path"]: a["name"] for (raw,) in self.db.execute("SELECT data FROM attachments WHERE session=?", (sid,)) for a in [json.loads(raw)]}
+            entries = []
+            with os.scandir(fd) as iterator:
+                for entry in iterator:
+                    if len(entries) >= 5000: raise Failure(413, "目录超过 5000 项，请选择更小的目录")
+                    metadata = entry.stat(follow_symlinks=False)
+                    if not (stat.S_ISDIR(metadata.st_mode) or stat.S_ISREG(metadata.st_mode)): continue
+                    # Credentials and gateway state must never be listed as work files.
+                    if entry.name in {".git", ".gemini", ".ssh", ".aws", ".codex", ".agents"}: continue
+                    full = root/relative/entry.name
+                    entries.append({"name": names.get(str(full), entry.name), "path": str(full), "directory": stat.S_ISDIR(metadata.st_mode),
+                                    "size": metadata.st_size, "modified": metadata.st_mtime})
+            result["entries"] = sorted(entries, key=lambda e: (not e["directory"], e["name"].casefold()))
+            return result
+        except FileNotFoundError:
+            if not relative.parts and scope != "workspace": return result
+            raise Failure(404, "目录不存在")
+        except OSError: raise Failure(403, "目录不可读或含有符号链接")
+        finally:
+            for fd in reversed(descriptors): os.close(fd)
+
+    def open_file(self, sid, raw, directory=False):
+        s = self.get(sid)
+        cwd = Path(self.workspace(s["cwd"]))
+        if not isinstance(raw, str) or "\x00" in raw or len(raw) > 8192:
+            raise Failure(400, "文件路径无效")
+        requested = Path(raw)
+        if ".." in requested.parts:
+            raise Failure(403, "文件路径不能包含父目录跳转")
+        target = requested if requested.is_absolute() else cwd / requested
+        allowed = [cwd]
+        if self.profile_home and s["conversationID"]:
+            allowed.insert(0, self.file_root(sid, "artifacts"))
+        target = Path(os.path.abspath(target))
+        base, components = None, None
+        for root in allowed:
+            if root == target or root in target.parents:
+                base, components = root, target.relative_to(root).parts
+                break
+            # macOS may spell the same root /var/... and /private/var/....
+            # Resolve only a ROOT prefix, from outermost to innermost. Once
+            # inside that boundary, preserve every child for O_NOFOLLOW.
+            # Resolving target itself would silently accept workspace links.
+            for prefix in reversed((target,) + tuple(target.parents)):
+                try:
+                    canonical = prefix.resolve(strict=True)
+                except (OSError, RuntimeError):
+                    continue
+                if canonical == root:
+                    base, components = root, target.relative_to(prefix).parts
+                    break
+                if root in canonical.parents:
+                    # We already entered the boundary via a subdirectory.
+                    # Do not follow more aliases to manufacture a root match.
+                    break
+            if base is not None: break
+        if base is None: raise Failure(403, "文件不在此会话的允许范围")
+        if any(part in {".git", ".gemini", ".ssh", ".aws", ".codex", ".agents"} for part in components):
+            raise Failure(403, "不能访问凭据或内部配置目录")
+        descriptors = []
+        try:
+            anchor = base
+            prefix = ()
+            if base != cwd:
+                anchor = self.profile_home
+                prefix = base.relative_to(anchor).parts
+            fd = os.open(anchor, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW); descriptors.append(fd)
+            for part in prefix + components[:-1]:
+                fd = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd); descriptors.append(fd)
+            if directory:
+                if components:
+                    result = os.open(components[-1], os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
+                    os.close(result)
+                return None, target.name, 0
+            if not components: raise Failure(400, "请选择普通文件下载")
+            result = os.open(components[-1], os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=fd)
+            import stat
+            metadata = os.fstat(result)
+            if not stat.S_ISREG(metadata.st_mode) or metadata.st_size > MAX_FILE:
+                os.close(result); raise Failure(413, "只支持下载 25 MB 内的普通文件")
+            return os.fdopen(result, "rb"), target.name, metadata.st_size
+        except OSError: raise Failure(404, "文件不存在、不可读或为符号链接")
+        finally:
+            for fd in reversed(descriptors): os.close(fd)
+
+    def project_snapshot(self, sid, raw=""):
+        import zipfile
+        session = self.get(sid)
+        if session["running"]: raise Failure(409, "请等待当前任务结束后同步项目")
+        cwd = Path(self.workspace(session["cwd"]))
+        requested = Path(raw) if raw else cwd
+        target = requested if requested.is_absolute() else cwd/requested
+        if ".." in target.parts or not (target == cwd or cwd in target.parents):
+            raise Failure(403, "只能同步当前会话的项目目录")
+        self.open_file(sid, str(target), directory=True)
+        relative_root = target.relative_to(cwd)
+        excluded = {".git", ".gemini", ".ssh", ".aws", ".codex", ".agents", ".agy-uploads", "node_modules", "bin", "obj", "dist", "build", ".venv", "venv", "__pycache__"}
+        archive = tempfile.TemporaryFile(mode="w+b")
+        total, count = 0, 0
+        queue = [relative_root]
+        try:
+            with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as output:
+                while queue:
+                    directory = queue.pop()
+                    listing = self.list_files(sid, path=str(directory))
+                    for entry in listing["entries"]:
+                        name = entry["name"]
+                        candidate = Path(entry["path"])
+                        if any(private == candidate or private in candidate.parents for private in [self.directory.resolve()] + ([self.profile_home] if self.profile_home else [])): continue
+                        if name in excluded or name.startswith(".env") or name.endswith((".pem", ".key", ".pfx", ".p12")): continue
+                        count += 1
+                        if count > 5000: raise Failure(413, "项目快照最多 5000 项，请选择更小的项目目录")
+                        relative = directory/name
+                        if entry["directory"]:
+                            queue.append(relative)
+                            output.writestr(relative.relative_to(relative_root).as_posix()+"/", b"")
+                        else:
+                            stream, _, size = self.open_file(sid, str(cwd/relative))
+                            with stream:
+                                total += size
+                                if total > MAX_FILE: raise Failure(413, "项目快照最多 25 MiB，请选择更小的项目目录")
+                                with output.open(relative.relative_to(relative_root).as_posix(), "w") as destination:
+                                    left = size
+                                    while left:
+                                        chunk = stream.read(min(65536, left))
+                                        if not chunk: raise Failure(409, "项目文件正在变化，请停止编辑后重新同步")
+                                        destination.write(chunk); left -= len(chunk)
+            size = archive.tell()
+            if size > MAX_FILE: raise Failure(413, "项目快照 ZIP 超过 25 MiB")
+            archive.seek(0)
+            return archive, "project-snapshot.zip", size
+        except BaseException:
+            archive.close(); raise
 
     def delete(self, sid):
         with self.lock:
@@ -438,9 +702,12 @@ class Handler(BaseHTTPRequestHandler):
                     raise Failure(400, "无效 JSON")
             if self.command == "GET" and path == "/v1/status":
                 return self.respond(200, {"name": "AGY", "version": 1, "roots": list(map(str, gateway.roots)),
-                                          "defaultModel": gateway.default_model, "conversationScope": "gateway"})
+                                          "defaultModel": gateway.default_model, "conversationScope": "gateway",
+                                          "accountProfile": gateway.account_profile,
+                                          "capabilities": {"separateEffort": True, "nativeApprovals": gateway.review is not None, "artifacts": True, "fileBrowser": True, "directoryMentions": True, "projectSnapshots": True}})
             if self.command == "GET" and path == "/v1/models":
-                return self.respond(200, {"models": gateway.models(refresh=query.get("refresh") == ["1"])})
+                models = gateway.models(refresh=query.get("refresh") == ["1"])
+                return self.respond(200, {"models": models, "families": catalog.families(models)})
             if self.command == "GET" and path == "/v1/limits":
                 return self.respond(200, gateway.limits(refresh=query.get("refresh") == ["1"]))
             if path == "/v1/sessions":
@@ -449,6 +716,33 @@ class Handler(BaseHTTPRequestHandler):
                     return self.respond(200, {"sessions": sessions})
                 if self.command == "POST":
                     return self.respond(201, gateway.create(body))
+            approval = re.fullmatch(r"/v1/sessions/([a-f0-9-]{36})/approvals/([a-f0-9-]{36})", path)
+            if approval and self.command == "POST":
+                return self.respond(200, gateway.answer_approval(approval[1], approval[2], body.get("decision")))
+            if self.command == "GET" and path == "/v1/workspace":
+                return self.respond(200, gateway.list_files(cwd=query.get("cwd", [str(gateway.roots[0])])[0], path=query.get("path", [""])[0]))
+            listing = re.fullmatch(r"/v1/sessions/([a-f0-9-]{36})/entries", path)
+            if listing and self.command == "GET":
+                return self.respond(200, gateway.list_files(listing[1], query.get("scope", ["workspace"])[0], query.get("path", [""])[0]))
+            artifact = re.fullmatch(r"/v1/sessions/([a-f0-9-]{36})/(files|snapshot)", path)
+            if artifact and self.command == "GET":
+                stream, name, size = (gateway.project_snapshot(artifact[1], query.get("path", [""])[0]) if artifact[2] == "snapshot" else gateway.open_file(artifact[1], query.get("path", [""])[0]))
+                with stream:
+                    self.send_response(200)
+                    self.send_header("Content-Type", mimetypes.guess_type(name)[0] or "application/octet-stream")
+                    self.send_header("Content-Length", str(size))
+                    self.send_header("Content-Disposition", "attachment; filename*=UTF-8''" + quote(name))
+                    self.send_header("Cache-Control", "no-store")
+                    self.send_header("X-Content-Type-Options", "nosniff")
+                    self.end_headers()
+                    left = size
+                    while left:
+                        chunk = stream.read(min(65536, left))
+                        if not chunk:
+                            self.close_connection = True; break
+                        self.wfile.write(chunk)
+                        left -= len(chunk)
+                return
             match = re.fullmatch(r"/v1/sessions/([a-f0-9-]{36})(?:/(messages|stop|events))?", path)
             if match:
                 sid, action = match.groups()
@@ -461,8 +755,8 @@ class Handler(BaseHTTPRequestHandler):
                 if self.command == "POST" and action == "stop":
                     return self.respond(200, gateway.stop(sid))
                 if self.command == "PATCH" and action is None:
-                    if "model" in body:
-                        return self.respond(200, gateway.set_model(sid, body["model"]))
+                    if any(k in body for k in ("model", "baseModel", "effort", "approvalMode", "mode")):
+                        return self.respond(200, gateway.configure(sid, body))
                     return self.respond(200, gateway.rename(sid, body.get("name")))
                 if self.command == "DELETE" and action is None:
                     gateway.delete(sid)
@@ -517,9 +811,12 @@ def main():
     parser.add_argument("--agy", default="/opt/pi-agent/agy-runtime/agy")
     parser.add_argument("--root", action="append", required=True)
     parser.add_argument("--default-model", default="")
+    parser.add_argument("--profile-home", help="Dedicated CLI login home; never the normal shared login home")
     args = parser.parse_args()
+    profiles.check_runtime(args.agy)
     key = Path(args.key_file).read_text().strip()
-    gateway = Gateway(args.data, key, args.agy, args.root, args.default_model)
+    gateway = Gateway(args.data, key, args.agy, args.root, args.default_model,
+                      profile_home=args.profile_home or str(Path(args.data)/"profile-home"))
     server = Server((args.host, args.port), gateway)
     print(f"AGY iPhone gateway listening on {args.host}:{server.server_port}", flush=True)
     try:
@@ -530,6 +827,8 @@ def main():
         for sid in list(gateway.active):
             gateway.stop(sid)
         server.server_close()
+        if gateway.review: gateway.review.close()
+        if gateway.review_directory: gateway.review_directory.cleanup()
 
 
 if __name__ == "__main__":

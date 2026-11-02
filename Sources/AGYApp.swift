@@ -13,14 +13,43 @@ import SwiftUI
 }
 struct AGYRoot: View {
     @EnvironmentObject private var store: AGYStore
+    @State private var file: PreviewDocument?
+    @State private var downloading = false
     var body: some View {
-        if store.connected {
-            TabView(selection: $store.tab) {
-                AGYChat().tag(0).tabItem { Label("对话", systemImage: "bubble.left.and.bubble.right") }
-                AGYHistory().tag(1).tabItem { Label("历史", systemImage: "clock") }
-                AGYSettings().tag(2).tabItem { Label("设置", systemImage: "gearshape") }
+        Group {
+            if store.connected {
+                TabView(selection: $store.tab) {
+                    AGYChat().tag(0).tabItem { Label("对话", systemImage: "bubble.left.and.bubble.right") }
+                    AGYFiles().tag(3).tabItem { Label("文件", systemImage: "folder") }
+                    AGYHistory().tag(1).tabItem { Label("历史", systemImage: "clock") }
+                    AGYSettings().tag(2).tabItem { Label("设置", systemImage: "gearshape") }
+                }
+            } else { AGYConnection() }
+        }
+        .environment(\.nativeMediaAPI, store.api)
+        .environment(\.nativeWorkspace, store.cwd)
+        .environment(\.nativeSessionID, store.selected?.id ?? "")
+        .environment(\.nativeMediaRunning, store.selected?.running ?? false)
+        .environment(\.openURL, OpenURLAction { url in
+            guard let api = store.api else { return .systemAction }
+            let path = NativeFileRules.downloadPath(url, host: api.credentials.url.host ?? "", cwd: store.cwd)
+            guard path != nil || NativeDownloadLinks.isExternalFile(url) else { return .systemAction }
+            guard !downloading else { return .handled }
+            let sid = store.selected?.id ?? ""
+            downloading = true
+            Task {
+                defer { downloading = false }
+                do {
+                    let target: URL
+                    if let path { target = try await api.download(path, sessionID: sid) }
+                    else { target = try await api.downloadExternal(url) }
+                    file = PreviewDocument(url: target)
+                } catch { store.error = error.localizedDescription }
             }
-        } else { AGYConnection() }
+            return .handled
+        })
+        .sheet(item: $file) { NativeDownloadedFile(url: $0.url) }
+        .overlay { if downloading { ProgressView("正在下载文件…").padding(24).background(.regularMaterial, in: RoundedRectangle(cornerRadius: 18)) } }
     }
 }
 struct AGYConnection: View {
@@ -63,6 +92,10 @@ struct AGYConnection: View {
 struct AGYChat: View {
     @EnvironmentObject private var store: AGYStore
     @State private var showConfiguration = false
+    @State private var following = true
+    @State private var jumpToLatest = 0
+    @AppStorage("nativeOutputMode") private var outputMode = NativeOutputMode.original.rawValue
+    @State private var showFiles = false
     @State private var attachmentPicker: AGYAttachmentPicker?
     @State private var pickerContext = UUID()
     @FocusState private var composerFocused: Bool
@@ -81,19 +114,14 @@ struct AGYChat: View {
                                 }
                             }.padding(.vertical, 36)
                         }
-                        ForEach(store.selected?.messages ?? []) { message in
-                            if !message.text.isEmpty || message.attachments?.isEmpty == false { NativeMessageRow(message: message.rendered, streaming: message.id == store.selected?.messages?.last?.id && store.selected?.running == true) }
-                            ForEach(message.attachments ?? []) { item in
-                                Label("\(item.name) · \(ByteCountFormatter.string(fromByteCount: Int64(item.size), countStyle: .file))", systemImage: item.mime.hasPrefix("image/") ? "photo" : "doc")
-                                    .font(.callout).padding(12).background(NativeTheme.surface, in: RoundedRectangle(cornerRadius: 12))
+                        if outputMode == NativeOutputMode.original.rawValue {
+                            ForEach(store.presentedMessages) { message in
+                                NativeMessageRow(message: message, streaming: message.id == store.selected?.messages?.last?.id && store.selected?.running == true)
                             }
-                            ForEach(message.tools ?? []) { tool in
-                                DisclosureGroup {
-                                    if tool.parameters != .object([:]) { Text(tool.parameters.pretty).font(.system(.caption, design: .monospaced)).textSelection(.enabled) }
-                                    if !tool.output.isEmpty { Text(tool.output).font(.system(.caption, design: .monospaced)).textSelection(.enabled) }
-                                } label: { Label(tool.name + (tool.state == "DONE" ? " · 完成" : " · 运行中"), systemImage: "terminal") }.font(.callout).padding(14).background(NativeTheme.surface, in: RoundedRectangle(cornerRadius: 16))
-                            }
+                        } else {
+                            NativeConversationTurns(turns: NativeConversationPresentation.turns(store.presentedMessages, live: nil, running: store.selected?.running ?? false), mode: NativeOutputMode(rawValue: outputMode) ?? .original)
                         }
+                        ForEach(store.selected?.approvals ?? []) { request in AGYApprovalCard(request: request) }
                         if store.selected?.running == true { HStack { ProgressView(); Text("AGY 正在工作…").font(.callout).foregroundStyle(.secondary) }.padding(10) }
                         if let issue = store.error { Label(issue, systemImage: "wifi.exclamationmark").font(.callout).foregroundStyle(.red).textSelection(.enabled) }
                         if let error = store.selected?.error, !error.isEmpty { Label(error, systemImage: "exclamationmark.circle").font(.callout).foregroundStyle(.orange).textSelection(.enabled) }
@@ -108,9 +136,9 @@ struct AGYChat: View {
                         }
                         Color.clear.frame(height: 1).id("bottom")
                     }.padding(16)
+                        .background(NativeScrollFollow(conversation: store.selected?.id ?? "new", jump: jumpToLatest, following: $following).frame(width: 0, height: 0))
                 }.scrollDismissesKeyboard(.interactively)
-                    .defaultScrollAnchor(.bottom)
-                    .onChange(of: store.selected?.revision) { _, _ in if store.selected?.running == true { proxy.scrollTo("bottom", anchor: .bottom) } }
+                    .overlay(alignment: .bottomTrailing) { if !following { Button { jumpToLatest += 1 } label: { Image(systemName: "arrow.down").padding(14).background(.regularMaterial, in: Circle()) }.accessibilityLabel("回到最新消息").padding() } }
                     .safeAreaInset(edge: .bottom, spacing: 0) { composer }
                     .background(NativeTheme.canvas)
             }
@@ -119,6 +147,9 @@ struct AGYChat: View {
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) { Button { showConfiguration = true } label: { Image(systemName: "slider.horizontal.3").frame(width: 36, height: 36) }.accessibilityLabel("模型和工作目录") }
                 ToolbarItem(placement: .topBarTrailing) { Button { store.newConversation() } label: { Image(systemName: "square.and.pencil").frame(width: 36, height: 36) }.accessibilityLabel("新建对话").disabled(store.busy || store.pending != nil) }
+            }
+            .sheet(isPresented: $showFiles) {
+                AGYFiles(picking: true).presentationDetents([.medium, .large]).presentationDragIndicator(.visible)
             }
             .sheet(isPresented: $showConfiguration) { AGYConfiguration() }
             .sheet(item: $attachmentPicker) { picker in
@@ -138,6 +169,21 @@ struct AGYChat: View {
     }
     private var composer: some View {
         VStack(alignment: .leading, spacing: 10) {
+            if !store.references.isEmpty {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack {
+                        ForEach(store.references) { entry in
+                            HStack {
+                                Text("@ " + entry.name).font(.caption)
+                                Button { store.references.removeAll { $0.id == entry.id }; store.saveDraft() } label: { Image(systemName: "xmark.circle.fill") }
+                                    .accessibilityLabel("移除引用 " + entry.name).disabled(store.busy || store.pending != nil)
+                            }.padding(10).background(NativeTheme.surface, in: Capsule())
+                        }
+                    }
+                }
+            }
+            Button { showFiles = true } label: { Label("@ 引用工作文件", systemImage: "at").font(.caption) }
+                .disabled(store.busy || store.pending != nil)
             if !store.attachments.isEmpty {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 8) {
@@ -163,7 +209,13 @@ struct AGYChat: View {
                 Circle().fill(store.selected?.running == true ? .orange : NativeTheme.accent).frame(width: 6, height: 6)
                 Text(store.connection).font(.caption).foregroundStyle(.secondary)
                 Spacer()
-                Button { showConfiguration = true } label: { Text(store.models.first(where: { $0.id == store.model })?.name ?? "选择模型").lineLimit(1).font(.caption) }
+                Button { showConfiguration = true } label: { Text(store.currentFamily?.name ?? "选择模型").lineLimit(1).font(.caption) }
+            }
+            HStack {
+                Text("思考：" + AGYThinking.title(store.effort)).font(.caption).foregroundStyle(.secondary)
+                Spacer()
+                Text(store.approvalMode == "turbo" ? "Turbo" : store.approvalMode == "review" ? "逐项审批" : "旧版策略").font(.caption2).foregroundStyle(.secondary)
+                Menu { Picker("输出展示", selection: $outputMode) { ForEach(NativeOutputMode.allCases) { Text($0.title).tag($0.rawValue) } } } label: { Label(NativeOutputMode(rawValue: outputMode)?.title ?? "原版", systemImage: "text.alignleft").font(.caption) }
             }
             HStack(alignment: .bottom, spacing: 12) {
                 Menu {
@@ -175,14 +227,17 @@ struct AGYChat: View {
                 if store.selected?.running == true {
                     Button { Task { await store.stop() } } label: { Image(systemName: "stop.fill").frame(width: 44, height: 44).background(NativeTheme.accent, in: Circle()).foregroundStyle(NativeTheme.onAccent) }.accessibilityLabel("停止任务")
                 } else {
-                    Button { composerFocused = false; Task { await store.send() } } label: {
+                    Button { composerFocused = false; jumpToLatest += 1; Task { await store.send() } } label: {
                         Group { if store.busy { ProgressView() } else { Image(systemName: "arrow.up").fontWeight(.semibold) } }.frame(width: 44, height: 44)
                             .background(store.canSend ? NativeTheme.accent : NativeTheme.inactiveControl, in: Circle()).foregroundStyle(store.canSend ? NativeTheme.onAccent : NativeTheme.inactiveSymbol)
                     }.disabled(!store.canSend).accessibilityLabel("发送消息")
                 }
             }.padding(10).background(NativeTheme.composer, in: RoundedRectangle(cornerRadius: 22)).overlay(RoundedRectangle(cornerRadius: 22).stroke(NativeTheme.border, lineWidth: 1))
         }.padding(.horizontal, 16).padding(.top, 10).padding(.bottom, 10).background(NativeTheme.canvas)
-            .onChange(of: store.draft) { _, _ in store.saveDraft() }
+            .onChange(of: store.draft) { old, value in
+                store.saveDraft()
+                if AGYFilePresentation.opensMention(old: old, new: value), !store.busy, store.pending == nil { showFiles = true }
+            }
     }
 }
 enum AGYAttachmentPicker: String, Identifiable { case photos, files; var id: String { rawValue } }
@@ -192,24 +247,68 @@ struct AGYConfiguration: View {
     var body: some View {
         NavigationStack {
             Form {
-                Section("模型") {
-                    Picker("模型", selection: Binding(get: { store.model }, set: { value in Task { await store.setModel(value) } })) {
-                        ForEach(Array(Set(store.models.map(\.family))).sorted(), id: \.self) { family in
-                            Section(family) { ForEach(store.models.filter { $0.family == family }) { Text($0.name).tag($0.id) } }
-                        }
-                    }.pickerStyle(.inline).disabled(store.busy || store.selected?.running == true)
-                    Button { Task { await store.refreshModels() } } label: { HStack { Text("刷新可用模型"); if store.modelsLoading { ProgressView() } } }.disabled(store.modelsLoading)
+                Section {
+                    Text("主动修改的配置会记住，供新对话沿用；已有对话使用各自保存的配置。").font(.footnote).foregroundStyle(.secondary)
                 }
+                Section("1 · 选择模型") {
+                    Picker("模型", selection: Binding(get: { store.baseModel }, set: { value in Task { await store.setModel(value) } })) {
+                        ForEach(store.families) { family in Text(family.name).tag(family.id) }
+                    }
+                    Button { Task { await store.refreshModels() } } label: { HStack { Text("刷新可用模型"); if store.modelsLoading { ProgressView() } } }.disabled(store.modelsLoading)
+                }.disabled(store.busy || store.selected?.running == true || !store.gatewayReady)
+                Section("2 · 思考强度") {
+                    if let family = store.currentFamily, family.efforts != [""] {
+                        Picker("思考强度", selection: Binding(get: { store.effort }, set: { value in Task { await store.setThinking(value) } })) {
+                            ForEach(family.efforts, id: \.self) { Text(AGYThinking.title($0)).tag($0) }
+                        }.pickerStyle(.segmented)
+                    } else { Text("当前模型未提供独立的思考强度选项").foregroundStyle(.secondary) }
+                }.disabled(store.busy || store.selected?.running == true || !store.gatewayReady)
+                Section("3 · 审批策略") {
+                    Picker("审批策略", selection: Binding(get: { store.approvalMode }, set: { value in Task { await store.configure(permission: value) } })) {
+                        if store.approvalMode == "legacy" { Text("旧版策略 · 请重新选择").tag("legacy") }
+                        ForEach(AGYApprovalMode.allCases) { Text($0.title).tag($0.rawValue) }
+                    }
+                    Text(AGYApprovalMode(rawValue: store.approvalMode)?.detail ?? "旧会话尚未选择新版审批策略。").font(.footnote).foregroundStyle(.secondary)
+                }.disabled(store.busy || store.selected?.running == true || !store.gatewayReady)
+                Section("执行方式") {
+                    Picker("执行方式", selection: Binding(get: { store.mode }, set: { value in Task { await store.configure(agentMode: value) } })) {
+                        Text("先做计划").tag("plan"); Text("直接实施").tag("accept-edits")
+                    }
+                    Text("执行方式决定先计划还是直接工作；审批策略单独控制工具是否需要你确认。").font(.footnote).foregroundStyle(.secondary)
+                }.disabled(store.busy || store.selected?.running == true || !store.gatewayReady)
                 Section("工作空间") {
-                    Picker("目录", selection: $store.cwd) { ForEach(store.roots, id: \.self) { Text($0).tag($0) } }
-                    Picker("执行方式", selection: $store.mode) { Text("先做计划").tag("plan"); Text("允许编辑文件").tag("accept-edits") }
-                    Text("计划模式用于分析。允许编辑文件后，AGY 可在服务器工作目录修改文件；需要额外批准的操作可能被无头 CLI 拒绝。").font(.footnote).foregroundStyle(.secondary)
+                    Text(URL(fileURLWithPath: store.cwd).lastPathComponent).font(.caption)
+                    NavigationLink("浏览并选择项目目录") { AGYWorkspacePicker() }
+                    if store.selected != nil { Text("工作目录在新建会话时设置。").font(.footnote).foregroundStyle(.secondary) }
                 }.disabled(store.selected != nil || store.busy)
-                if store.selected != nil { Section { Text("任务结束后可以切换模型，已有对话会保留。工作目录与执行方式在新建会话时设置。").font(.footnote) } }
-            }.navigationTitle("对话配置").navigationBarTitleDisplayMode(.inline)
+                if !store.gatewayReady { Text("此服务器尚未启用新版账号与审批后端，见源码包中的部署说明。").foregroundStyle(.orange) }
+            }.navigationTitle("模型与任务配置").navigationBarTitleDisplayMode(.inline)
                 .toolbar { ToolbarItem(placement: .confirmationAction) { Button("完成") { dismiss() } } }
                 .task { await store.refreshModels() }
         }
+    }
+}
+struct AGYApprovalCard: View {
+    let request: AGYApproval
+    @EnvironmentObject private var store: AGYStore
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Label("等待审批 · " + request.tool, systemImage: "hand.raised.fill").font(.headline)
+            if !request.parameters["CommandLine"].string.isEmpty {
+                Text(request.parameters["CommandLine"].string).font(.system(.callout, design: .monospaced)).lineLimit(6).textSelection(.enabled)
+            } else if let path = ["AbsolutePath", "TargetFile", "path", "Url"].map({ request.parameters[$0].string }).first(where: { !$0.isEmpty }) {
+                Text(path).font(.callout).textSelection(.enabled)
+            }
+            Text("只有这一次操作会被批准，不会记住为始终允许。").font(.caption).foregroundStyle(.secondary)
+            DisclosureGroup("查看完整操作参数") { Text(request.parameters.pretty).font(.system(.caption, design: .monospaced)).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading) }
+            Text("到期：" + Date(timeIntervalSince1970: request.expiresAt).formatted(date: .omitted, time: .standard)).font(.caption)
+            HStack {
+                Button("拒绝", role: .destructive) { Task { await store.answer(request, allow: false) } }.buttonStyle(.bordered)
+                Spacer()
+                Button("仅允许本次") { Task { await store.answer(request, allow: true) } }.buttonStyle(.borderedProminent)
+            }.disabled(store.approvalBusy || request.expiresAt <= Date().timeIntervalSince1970)
+        }.padding(16).background(NativeTheme.surface, in: RoundedRectangle(cornerRadius: 18))
+            .overlay(RoundedRectangle(cornerRadius: 18).stroke(.orange.opacity(0.6)))
     }
 }
 struct AGYHistory: View {
@@ -218,10 +317,19 @@ struct AGYHistory: View {
     @State private var renaming: AGYSession?
     @State private var newName = ""
     @State private var deleting: AGYSession?
-        private var filtered: [AGYSession] { store.sessions.filter { search.isEmpty || $0.name.localizedStandardContains(search) || $0.cwd.localizedStandardContains(search) } }
+    private var filtered: [AGYSession] { store.sessions.filter { search.isEmpty || $0.name.localizedStandardContains(search) || $0.cwd.localizedStandardContains(search) } }
+    private var groups: [NativeSessionHistory.Group] {
+        let formatter = ISO8601DateFormatter()
+        let rows = filtered.map { PiSession(id: $0.id, cwd: $0.cwd, name: $0.name, firstMessage: nil, modified: formatter.string(from: Date(timeIntervalSince1970: $0.modified)), relation: nil) }
+        return NativeSessionHistory.groups(rows)
+    }
     var body: some View {
         NavigationStack {
-            List(filtered) { s in
+            List {
+                ForEach(groups) { group in
+                    Section(group.title) {
+                        ForEach(group.sessions) { entry in
+                            if let s = filtered.first(where: { $0.id == entry.id }) {
                 Button { Task { await store.select(s.id); store.tab = 0 } } label: {
                     VStack(alignment: .leading, spacing: 6) {
                         HStack { Text(s.name).font(.headline).foregroundStyle(.primary).lineLimit(2); if s.running { ProgressView().controlSize(.small) } }
@@ -231,6 +339,10 @@ struct AGYHistory: View {
                 }.swipeActions {
                     Button("删除", role: .destructive) { deleting = s }.disabled(s.running)
                     Button("重命名") { renaming = s; newName = s.name }.tint(.blue)
+                }
+                            }
+                        }
+                    }
                 }
             }.navigationTitle("历史对话").searchable(text: $search, prompt: "搜索名称或目录").refreshable { await store.reload() }
                 .overlay { if filtered.isEmpty { ContentUnavailableView("还没有对话", systemImage: "bubble.left.and.bubble.right", description: Text("在对话页发送第一条消息。")) } }
@@ -249,6 +361,7 @@ struct AGYHistory: View {
 struct AGYSettings: View {
     @EnvironmentObject private var store: AGYStore
     @State private var disconnect = false
+    @AppStorage("nativeOutputMode") private var settingsOutputMode = NativeOutputMode.original.rawValue
     var body: some View {
         NavigationStack {
             Form {
@@ -258,6 +371,13 @@ struct AGYSettings: View {
                     ForEach(store.roots, id: \.self) { Text($0).font(.caption).textSelection(.enabled) }
                 }
                 Section { NavigationLink { AGYLimitsView() } label: { Label("账户额度", systemImage: "chart.bar") } }
+                Section("输出展示") {
+                    Picker("展示方式", selection: $settingsOutputMode) { ForEach(NativeOutputMode.allCases) { Text($0.title).tag($0.rawValue) } }
+                    Text("步骤摘要和结论优先保留真实过程，随时可以展开。").font(.footnote).foregroundStyle(.secondary)
+                }
+                Section("账号") {
+                    Text("Google 账号在服务器独立配置中登录；更换账号后会重新读取模型和额度，并隔离历史及草稿。").font(.footnote)
+                }
                 Section("关于") {
                     LabeledContent("版本", value: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "")
                     Text("独立的原生 AGY 客户端，沿用 Pi iPhone 的聊天体验。Google 登录与任务运行在服务器上完成。").font(.footnote)

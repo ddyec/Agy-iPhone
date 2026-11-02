@@ -16,6 +16,7 @@ struct NativeMessageRow: View {
                     ShareLink(item: message.text) { Image(systemName: "square.and.arrow.up").font(.caption) }.accessibilityLabel("分享消息")
                 }
             }.font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+            NativeMessageMedia(message: message)
             if message.role == "toolResult" {
                 DisclosureGroup(message.value["isError"].bool ? "工具执行失败 · 查看详情" : "查看执行结果") {
                     ForEach(Array(message.content.enumerated()), id: \.offset) { _, block in content(block) }
@@ -43,12 +44,10 @@ struct NativeMessageRow: View {
             DisclosureGroup("思考过程") { NativeMarkdown(text: block["thinking"].string).foregroundStyle(.secondary) }.font(.callout)
         case "toolCall":
             DisclosureGroup {
-                ScrollView(.horizontal) { Text(block["rawInput"].string.isEmpty ? block["arguments"].pretty : block["rawInput"].string).font(.system(.caption, design: .monospaced)).textSelection(.enabled) }.reservesHorizontalSwipe()
+                NativeCodeBlock(language: "命令参数", code: block["rawInput"].string.isEmpty ? block["arguments"].pretty : block["rawInput"].string, collapsed: false)
             } label: { Label(block["name"].string.isEmpty ? block["toolName"].string : block["name"].string, systemImage: "wrench.and.screwdriver") }.font(.callout)
         case "image":
-            if let data = Data(base64Encoded: block["data"].string), let image = UIImage(data: data) {
-                Image(uiImage: image).resizable().scaledToFit().frame(maxHeight: 300).clipShape(RoundedRectangle(cornerRadius: 12)).accessibilityLabel("消息中的图片")
-            } else { Label("图片内容暂不可用", systemImage: "photo").foregroundStyle(.secondary) }
+            EmptyView() // Image blocks are visible above collapsed tool details.
         default: EmptyView()
         }
     }
@@ -56,28 +55,31 @@ struct NativeMessageRow: View {
 
 struct NativeMarkdown: View {
     let text: String
+    @AppStorage("nativeOutputMode") private var outputMode = NativeOutputMode.original.rawValue
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             ForEach(Array(MarkdownBlock.parse(text).enumerated()), id: \.offset) { _, block in
                 switch block {
-                case .text(let value): paragraphs(value)
+                case .text(let value):
+                    if let svg = NativeMediaReferences.svg(value) {
+                        paragraphs(value.replacingOccurrences(of: svg, with: ""))
+                        NativeMediaPreview(data: Data(svg.utf8))
+                        NativeCodeBlock(language: "SVG 源码", code: svg, collapsed: true)
+                    } else { paragraphs(value) }
                 case .code(let language, let code):
-                    VStack(alignment: .leading, spacing: 8) {
-                        HStack {
-                            Text(language.isEmpty ? "代码" : language).font(.caption).foregroundStyle(.secondary)
-                            Spacer()
-                            Button { UIPasteboard.general.string = code } label: { Label("复制", systemImage: "doc.on.doc").font(.caption) }
-                        }
-                        ScrollView(.horizontal) { Text(code).font(.system(.callout, design: .monospaced)).textSelection(.enabled).fixedSize(horizontal: true, vertical: false) }.reservesHorizontalSwipe()
-                    }.padding(12).background(Color(uiColor: .tertiarySystemFill), in: RoundedRectangle(cornerRadius: 12))
+                    if let svg = NativeMediaReferences.svg(code) { NativeMediaPreview(data: Data(svg.utf8)) }
+                    NativeCodeBlock(language: language, code: code, collapsed: NativeMediaReferences.svg(code) != nil || outputMode != NativeOutputMode.original.rawValue)
+                        .id(outputMode + language)
                 case .table(let rows):
                     ScrollView(.horizontal) {
                         Grid(alignment: .topLeading, horizontalSpacing: 0, verticalSpacing: 0) {
                             ForEach(Array(rows.enumerated()), id: \.offset) { row, cells in
                                 GridRow {
-                                    ForEach(Array(cells.enumerated()), id: \.offset) { _, cell in
+                                    ForEach(Array(cells.enumerated()), id: \.offset) { column, cell in
                                         Text(inline(cell)).font(row == 0 ? .callout.bold() : .callout).textSelection(.enabled)
-                                            .frame(minWidth: 90, maxWidth: 260, alignment: .leading).padding(10)
+                                            .lineLimit(nil)
+                                            .frame(width: tableWidth(rows, column: column), alignment: .leading)
+                                            .fixedSize(horizontal: false, vertical: true).padding(10)
                                             .background(row == 0 ? Color.accentColor.opacity(0.1) : Color(uiColor: .tertiarySystemFill))
                                             .overlay(Rectangle().stroke(Color.secondary.opacity(0.12), lineWidth: 0.5))
                                     }
@@ -87,10 +89,16 @@ struct NativeMarkdown: View {
                     }.clipShape(RoundedRectangle(cornerRadius: 10)).reservesHorizontalSwipe()
                 }
             }
+            NativeFileLinks(text: text)
         }.frame(maxWidth: .infinity, alignment: .leading)
+            .lineLimit(nil).fixedSize(horizontal: false, vertical: true)
+    }
+    private func tableWidth(_ rows: [[String]], column: Int) -> CGFloat {
+        let longest = rows.map { column < $0.count ? $0[column].count : 0 }.max() ?? 0
+        return CGFloat(min(240, max(110, longest * 10)))
     }
     private func inline(_ value: String) -> AttributedString {
-        (try? AttributedString(markdown: value, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))) ?? AttributedString(value)
+        (try? AttributedString(markdown: NativeDownloadLinks.normalizedMarkdown(value), options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))) ?? AttributedString(value)
     }
     private func paragraphs(_ value: String) -> some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -105,5 +113,38 @@ struct NativeMarkdown: View {
                 } else { Text(inline(line)).textSelection(.enabled) }
             }
         }
+    }
+}
+
+struct NativeCodeBlock: View {
+    let language: String
+    let code: String
+    let collapsed: Bool
+    @State private var expanded = false
+    @State private var wrap = true
+    init(language: String, code: String, collapsed: Bool) {
+        self.language = language; self.code = code; self.collapsed = collapsed
+        _expanded = State(initialValue: !collapsed)
+    }
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 10) {
+                Button { expanded.toggle() } label: {
+                    Label(language.isEmpty ? "代码" : language, systemImage: expanded ? "chevron.down" : "chevron.right")
+                }.font(.caption).foregroundStyle(.secondary)
+                Spacer()
+                Button { wrap.toggle() } label: { Image(systemName: wrap ? "text.word.spacing" : "arrow.left.and.right") }
+                    .accessibilityLabel(wrap ? "自动换行已开启，切换为横向滚动" : "开启自动换行")
+                Button { UIPasteboard.general.string = code } label: { Label("复制", systemImage: "doc.on.doc") }.font(.caption)
+            }
+            if expanded {
+                if wrap {
+                    Text(code).font(.system(.callout, design: .monospaced)).textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading).fixedSize(horizontal: false, vertical: true)
+                } else {
+                    ScrollView(.horizontal) { Text(code).font(.system(.callout, design: .monospaced)).textSelection(.enabled).fixedSize(horizontal: true, vertical: true) }.reservesHorizontalSwipe()
+                }
+            }
+        }.padding(12).background(Color(uiColor: .tertiarySystemFill), in: RoundedRectangle(cornerRadius: 12))
     }
 }

@@ -1,4 +1,44 @@
+## 2026-11-02 Actions build attempt
+
+User authorized pushing the current source and trying an iPhone workflow. The current GitHub OAuth credential lacks workflow-edit scope, so the existing push-triggered workflow is preserved. `scripts/package.sh` runs the additional configuration-memory, file-label, history, presentation and scroll tests before the IPA archive. No second manual dispatch is issued. Python regressions rechecked locally: **23 passed** (3.947 s), including the current project-snapshot filtering regression. Prior source-only validation records below describe their original delivery dates; they are not statements about this newly authorized run. Actual macOS/IPA results are reported by the Actions run.
+
+## AGY 1.3.1 configuration memory correction
+
+- Fixed a client bug: connection initialization always replaced the selected model/workspace, and task preferences were only in memory. A Codable snapshot is now persisted with UserDefaults under a server+account-scoped key, outside the transient conversation cache. Model variant IDs retain the selected thinking effort. New conversations restore the saved snapshot; selecting existing history does not rewrite it; explicit successful changes update it. Failed server configuration requests do not write preferences.
+- Account switching never imports another account's permission or workspace defaults. Unavailable models and out-of-root workspaces are validated against the current server catalog/roots. The saved project directory is checked against the server on reconnect. Existing sessions continue to use their own server-saved configuration.
+- Swift syntax validation: **30 source files and 7 test files (37 total)** parse successfully with tree-sitter-swift. Xcode project regenerated as **1.3.1 / build 6** and includes every source file.
+- Added `AGYConfigurationMemoryTests.swift` covering reloaded preferences, origin/account isolation, model fallback, workspace boundary checks, invalid enum values and corrupted data. It is wired into `scripts/check-local.sh`. These executable Swift tests and native typechecking were **not run** because this Linux environment has no Swift compiler or Xcode. Syntax checks do not establish an iOS build or device pass.
+- Backend code is unchanged in this client-only fix. The preceding 22 passing Python gateway tests remain the latest backend validation; they were not rerun for this change. No production service restart or account change, no push, no GitHub Actions and no IPA build occurred.
+
+## AGY 1.3.0 file browser and directory mentions
+
+- Linux Python 3.10: `python3 -W error::ResourceWarning -m unittest discover -s Server -v` — **22 tests passed**, 3.840 seconds, including six new file-workflow tests. Existing macOS root-alias regression remains passing.
+- New coverage: authenticated HTTP browsing/upload/binary download/folder-reference admission; UTF-8 and space/newline names; original upload names; upload without a model turn; empty and own-conversation artifact scopes; reference-only requests; folder and file paths delivered as escaped context without preloading contents; request-ID conflict detection with changed references; forbidden links, traversal, missing files and credential-directory refusal.
+- Swift tree-sitter syntax scan: **29 Sources + 6 Tests = 35 files parsed**. Xcode project regenerated with the new sources, version **1.3.0 / build 5**. Added `AGYFilePresentationTests.swift` and wired it into `scripts/check-local.sh` for execution on a Mac.
+- This environment has no Swift compiler or Xcode. Swift typechecking, native executable tests, iPhone archive/IPA, file-provider behavior, mention sheet and Quick Look interaction are **not verified here**. A syntactic parse is not a successful native build.
+- No push, GitHub Actions dispatch, production gateway restart, account switch or real-account model task was performed for this change. Python integration tests use a temporary fake CLI and temporary files; this change does not claim a real CLI end-to-end run.
+- File-manager limits: regular-file upload/download at most 25 MiB each, 8 selections per upload batch, 8 distinct references per message, 5000 listed entries per directory. Whole-folder `@` is supported; folder ZIP download, delete/rename/move and recursive global search are not implemented. Chat attachment sends retain their 50 MiB total limit.
+
 # AGY iPhone validation
+
+## macOS path normalization correction
+
+- Canonicalized temporary fixture roots in both Python test suites and compared HOME against `a.resolve()`.
+- `open_file()` now recognizes equivalent spellings of the permitted root, including macOS `/var` versus `/private/var`, while preserving every child component for `O_NOFOLLOW`. It does not resolve the requested file or its in-workspace directories. A root alias cannot be manufactured by following a link after entering an allowed subdirectory.
+- Parent traversal is rejected before `abspath` can erase the `..` component. Internal and external directory links and final file links remain rejected.
+- Added portable alias regressions that reproduce the original 403 on Linux before the fix, plus link/traversal regressions. All 16 Python tests pass locally with ResourceWarnings promoted to errors.
+- This correction has not been run on a macOS runner here. Swift and IPA stages were not run or claimed successful. No push, Actions invocation, production restart or account switch was performed.
+
+## 1.2.0 / build 4 — 2026-10-30 local source delivery
+
+- No repository push or GitHub Actions run was performed for this delivery. Both packaged workflows are manual-dispatch only. No new IPA, Xcode archive, simulator run or device acceptance is claimed.
+- Local Python regression: 14 tests pass across legacy streaming/idempotency/upload recovery and new model/effort resolution, invalid combinations, profile isolation, missing approval-backend rejection, private socket approval authentication, wrong-session rejection, single-use decisions, expiration, stop/cancel and artifact path confinement/byte preservation.
+- Real CLI 1.4.10 integration used a temporary independent profile and a copy of the existing server login solely for a harmless `printf NATIVE_REVIEW_OK` probe. Restriction + Deny surfaced one native request and the tool was blocked; Restriction + Allow surfaced one request and printed the marker; Turbo surfaced zero native requests and printed the marker. Temporary copied credentials were removed with the isolated directory. This was NOT a new Google account login or a change to the shared production account.
+- Official session settings schema was checked for separate `toolPermission`, `artifactReviewPolicy`, execution mode and sandbox fields. The bridge uses actual official hook output, not unsupported stream-json control_response messages. Artifact waiting is disabled per turn because the native bridge reviews tools before execution; the desktop artifact-review interface is not replicated.
+- Swift syntax parsing passed for all 63 top-level Swift sources across AGY and PI. This is not a Swift type check or iOS SDK compile. A local Mac check script is included for native protocol, output presentation, history, imports and the new scroll policy.
+- Pi comparison baseline is the latest local `7bd64df`, newer than the repository default branch. Output display modes, wrapped code/tables, Unicode links, authenticated file previews/downloads, SVG/image rendering, date grouping and cache/draft behavior are adapted with AGY-specific transport.
+- PI 2.0.7 source contains the shared gesture-aware scroll follower. Removed lazy bottom-preference default inference, per-revision scrollTo, focus-triggered scrollTo and default bottom anchoring. Code-block expansion is initialized once instead of resetting onAppear. Source regression cases cover paused follow during idle updates, geometry changes, invalid distances, explicit return and conversation reset; executable Swift tests and actual phone scrolling remain unverified here.
+- The new server/client must be deployed together. The running production gateway was not restarted or moved to this release. Account switching remains for the user to complete later through ACCOUNT_LOGIN.md; old credentials were not logged out or overwritten.
 
 ## 1.1.0 / build 3
 
