@@ -67,6 +67,12 @@ struct NativeProcessSection: Identifiable {
     var messages: [ChatMessage]
 }
 extension NativeConversationPresentation {
+    static func summaryExcerpt(_ text: String) -> String {
+        let normalized = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let paragraph = normalized.components(separatedBy: "\n\n").first ?? normalized
+        let excerpt = String(paragraph.prefix(320))
+        return excerpt.count < normalized.count ? excerpt + "…" : excerpt
+    }
     static func sections(_ process: [ChatMessage]) -> [NativeProcessSection] {
         var result: [NativeProcessSection] = []
         for message in process {

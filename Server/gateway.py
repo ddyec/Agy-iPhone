@@ -333,6 +333,9 @@ class Gateway:
                     if item is None:
                         item = {"index": idx, "text": ""}; parts.append(item)
                     item["text"] += step.get("text_delta", "")
+                    thinking_delta = step.get("thinking_delta") or step.get("thinking") or ""
+                    if thinking_delta:
+                        item["thinking"] = item.get("thinking", "") + thinking_delta
                     m["text"] = item["text"]
                 if step.get("step_type") == "tool":
                     # Tool events may carry ACTIVE followed by DONE: replace by step identity.

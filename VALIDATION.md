@@ -1,3 +1,7 @@
+## Provider thinking compatibility
+
+The deployed gateway already emits optional `steps[].thinking` (including transcript-backed textless steps). The client now decodes and preserves this text in index order before each corresponding response/tool group. Long text uses a deterministic first-paragraph/320-character excerpt with an explicit expansion control; this is source text, not a generated explanation of hidden reasoning. New regressions cover textless thinking steps and source-only excerpts. The source gateway also preserves incoming thinking deltas. Existing production transcript/title behavior is retained when applying final-response metadata.
+
 ## 1.4.1 local save correction (same delivery)
 
 The user reported choosing an export destination but finding no file. The former export picker had no delegate/completion/error handling, and downloads only lived in a temporary preview folder. Downloads now keep a verified persistent copy in Documents/下载, exposed via Files using UIFileSharingEnabled + LSSupportsOpeningDocumentsInPlace. Credentials and account caches remain outside Documents.

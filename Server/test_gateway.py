@@ -66,13 +66,16 @@ class GatewayTests(unittest.TestCase):
         sid = s["id"]
         for index, kind, text in [(0, "agent_response", "先检查"), (1, "tool", "read"), (2, "agent_response", "再修改"), (3, "tool", "write")]:
             step = {"step_index":index, "step_type":kind}
-            if kind == "agent_response": step["text_delta"] = text
+            if kind == "agent_response":
+                step["text_delta"] = text
+                if index == 0: step["thinking_delta"] = "核对当前状态"
             else: step.update(tool_name=text, state="DONE", tool_info={"output":"done"})
             self.g.ingest(sid, {"event":"step_update", "step_update":step})
         self.g.ingest(sid, {"event":"result", "result":{"status":"SUCCESS", "response":"最终答复"}})
         answer = self.g.get(sid)["messages"][-1]
         self.assertEqual([step["index"] for step in answer["steps"]], [0,2])
         self.assertEqual([tool["id"] for tool in answer["tools"]], ["1","3"])
+        self.assertEqual(answer["steps"][0]["thinking"], "核对当前状态")
         self.assertEqual(answer["finalText"], "最终答复")
         self.g.ingest(sid, {"event":"result", "result":{"status":"SUCCESS"}})
         self.assertEqual(self.g.get(sid)["messages"][-1]["finalText"], "")

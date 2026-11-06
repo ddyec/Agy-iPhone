@@ -66,6 +66,9 @@ import Foundation
         check(noResult.presented.map(\.id) == ["incomplete-step-0", "incomplete-tool-1"], "Explicit empty final does not reuse progress as the answer")
         let repeated = AGYMessage(id: "repeat", role: "assistant", text: "相同文字", tools: [AGYTool(id: "1", name: "read", state: "DONE", parameters: .object([:]), output: "output")], steps: [AGYResponseStep(index: 0, text: "相同文字")], finalText: "相同文字")
         check(repeated.presented.count == 3, "Preserve identical earlier summary when a tool separates it from the final")
+        let thinking = AGYMessage(id: "thought", role: "assistant", text: "done", tools: [AGYTool(id: "1", name: "read", state: "DONE", parameters: .object([:]), output: "output")], steps: [AGYResponseStep(index: 0, text: "", thinking: "先核对依赖"), AGYResponseStep(index: 2, text: "done", thinking: "检查完毕")], finalText: "done")
+        check(thinking.presented.map(\.id) == ["thought-thinking-0", "thought-tool-1", "thought-thinking-2", "thought"], "Preserve provider-supplied thinking between tools, including textless steps")
+        check(NativeConversationPresentation.summaryExcerpt("第一段\n\n第二段") == "第一段…", "Summary excerpts use source text only")
         print("Passed \(checks) conversation presentation and download link checks")
     }
 }

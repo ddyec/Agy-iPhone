@@ -39,7 +39,7 @@ struct AGYApproval: Codable, Identifiable {
     let createdAt: Double
     let expiresAt: Double
 }
-struct AGYResponseStep: Codable { let index: Int; let text: String }
+struct AGYResponseStep: Codable { let index: Int; let text: String; var thinking: String? }
 struct AGYLimits: Decodable {
     let fetchedAt: Double
     let source: String
@@ -105,11 +105,18 @@ struct AGYMessage: Codable, Identifiable {
                 "role": .string("toolResult"), "toolName": .string(tool.name), "toolState": .string(tool.state), "details": tool.parameters,
                 "isError": .bool(tool.isError ?? false), "content": .string("```json\n" + tool.parameters.pretty + "\n```\n" + tool.output)]))))
         }
-        for step in orderedSteps where !step.text.isEmpty && step.index != repeatedFinalIndex {
+        for step in orderedSteps {
+            if let thinking = step.thinking, !thinking.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                middle.append((step.index, ChatMessage(id: id + "-thinking-\(step.index)", value: .object([
+                    "role": .string("assistant"), "presentationKind": .string("summary"), "content": .string(thinking)]))))
+            }
+            guard !step.text.isEmpty, step.index != repeatedFinalIndex else { continue }
             middle.append((step.index, ChatMessage(id: id + "-step-\(step.index)", value: .object([
                 "role": .string("assistant"), "presentationKind": .string("summary"), "content": .string(step.text)]))))
         }
-        let process = middle.sorted { $0.0 < $1.0 }.map(\.1)
+        let process = middle.enumerated().sorted {
+            $0.element.0 == $1.element.0 ? $0.offset < $1.offset : $0.element.0 < $1.element.0
+        }.map { $0.element.1 }
         guard !answer.isEmpty else { return process }
         var answerMessage = rendered
         if case .object(var fields) = answerMessage.value {

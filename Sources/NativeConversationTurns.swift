@@ -39,10 +39,8 @@ private struct NativeTurnTimeline: View {
             ForEach(NativeConversationPresentation.sections(turn.process)) { section in
                 if section.kind == .summary {
                     ForEach(section.messages) { message in
-                        VStack(alignment: .leading, spacing: 6) {
-                            Text("思考摘要").font(.caption.weight(.medium)).foregroundStyle(.secondary)
-                            NativeMarkdown(text: message.text)
-                        }.frame(maxWidth: .infinity, alignment: .leading)
+                        NativeSummaryCard(message: message)
+                            .id(message.id + (turn.running ? "-working" : "-finished"))
                     }
                 } else {
                     NativeToolGroup(section: section)
@@ -68,5 +66,20 @@ private struct NativeToolGroup: View {
                 Spacer()
             }.font(.caption).foregroundStyle(.secondary)
         }
+    }
+}
+
+private struct NativeSummaryCard: View {
+    let message: ChatMessage
+    @State private var expanded = false
+    private var excerpt: String { NativeConversationPresentation.summaryExcerpt(message.text) }
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("思考摘要").font(.caption.weight(.medium)).foregroundStyle(.secondary)
+            NativeMarkdown(text: expanded ? message.text : excerpt)
+            if excerpt != message.text.trimmingCharacters(in: .whitespacesAndNewlines) {
+                Button(expanded ? "收起摘要" : "展开摘要") { expanded.toggle() }.font(.caption)
+            }
+        }.frame(maxWidth: .infinity, alignment: .leading)
     }
 }
