@@ -24,7 +24,7 @@ struct AGYActivityState: Codable, Hashable {
         case "failed": return "exclamationmark.circle.fill"
         case "stopped": return "stop.circle.fill"
         case "paused": return "arrow.clockwise"
-        default: return "sparkles"
+        default: return "ellipsis"
         }
     }
 }

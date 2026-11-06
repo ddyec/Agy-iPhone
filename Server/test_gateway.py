@@ -59,6 +59,24 @@ class GatewayTests(unittest.TestCase):
         self.assertFalse(self.g.get(sid)["running"])
         return self.g.get(sid)
 
+    def test_progress_tool_order_and_explicit_final(self):
+        s = self.g.create({})
+        s["messages"] = [{"id":"user", "role":"user", "text":"inspect"}, {"id":"answer", "role":"assistant", "text":"", "tools":[]}]
+        self.g.save(s)
+        sid = s["id"]
+        for index, kind, text in [(0, "agent_response", "先检查"), (1, "tool", "read"), (2, "agent_response", "再修改"), (3, "tool", "write")]:
+            step = {"step_index":index, "step_type":kind}
+            if kind == "agent_response": step["text_delta"] = text
+            else: step.update(tool_name=text, state="DONE", tool_info={"output":"done"})
+            self.g.ingest(sid, {"event":"step_update", "step_update":step})
+        self.g.ingest(sid, {"event":"result", "result":{"status":"SUCCESS", "response":"最终答复"}})
+        answer = self.g.get(sid)["messages"][-1]
+        self.assertEqual([step["index"] for step in answer["steps"]], [0,2])
+        self.assertEqual([tool["id"] for tool in answer["tools"]], ["1","3"])
+        self.assertEqual(answer["finalText"], "最终答复")
+        self.g.ingest(sid, {"event":"result", "result":{"status":"SUCCESS"}})
+        self.assertEqual(self.g.get(sid)["messages"][-1]["finalText"], "")
+
     def test_unicode_tools_result_and_resume(self):
         s = self.g.create({})
         self.g.submit(s["id"], {"text": "first", "requestID": str(uuid.uuid4())})

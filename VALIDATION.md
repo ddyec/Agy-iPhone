@@ -1,3 +1,13 @@
+## AGY 1.4.1 layout and ordered process correction
+
+Replaced separate expanded-island center/trailing regions with one aligned card containing mark/status/timer/title. Compact mode now shows elapsed time or approval/sync text, with no sparkle symbol. Device-specific rendering still needs iPhone verification.
+
+The default non-raw conversation presentation now interleaves the provider's actual public progress summaries with collapsed groups of consecutive tool operations, preserving step indexes. Completion folds the entire process once, leaving only a final answer expanded; a user can reopen details. No per-token scroll calls or expanded-state resets were added. The native-output default migrates once to this timeline; the explicit original/raw mode remains available.
+
+Added a separate optional `finalText` field to distinguish actual terminal output from progress text. New turns initialize this field as empty and result events fill it; interrupted or final-less tasks cannot promote a summary to a final answer. Older records have a conservative compatibility path, and earlier text matching a final is retained when a tool intervenes.
+
+Linux backend regressions: 24 passed (3.900 s before the final empty-field initialization change; final run recorded by CI). Added native tests for summary/tool alternation, interrupted turns, final-message separation, duplicate-final handling and repeated summary text. Syntax scan: 42 Swift files parsed. Xcode/IPA checks are delegated to the current Actions run. Background push remains unsupported as documented for 1.4.0.
+
 ## AGY 1.4.0 local Live Activities
 
 Added an ActivityKit manager, shared Codable state/attributes, and a WidgetKit extension embedded in the app. Lock Screen and Dynamic Island use the official logo, bounded progress text, task phase, approval indication and timer. Deep links carry a scoped session ID, never a gateway key; wrong-account links are refused. Task content is hidden by default. Updates are serialized/coalesced, old-account activities are cleared, finished tasks end with a short dismissal delay, and user-dismissed tasks are suppressed.

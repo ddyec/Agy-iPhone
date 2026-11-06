@@ -8,7 +8,7 @@ xcrun swiftc -parse-as-library Sources/NativeScrollPolicy.swift Tests/NativeScro
 build/scroll
 xcrun swiftc -parse-as-library Sources/NativeCore.swift Sources/NativeSessionHistory.swift Tests/NativeHistoryTests.swift -o build/history
 build/history
-xcrun swiftc -parse-as-library Sources/NativeCore.swift Sources/NativeNetworking.swift Sources/NativeDownloadLinks.swift Sources/NativeMediaReferences.swift Sources/NativeConversationPresentation.swift Tests/NativePresentationTests.swift -o build/presentation
+xcrun swiftc -parse-as-library Sources/NativeCore.swift Sources/AGYDomain.swift Sources/NativeNetworking.swift Sources/NativeDownloadLinks.swift Sources/NativeMediaReferences.swift Sources/NativeConversationPresentation.swift Tests/NativePresentationTests.swift -o build/presentation
 build/presentation
 xcrun swiftc -parse-as-library Sources/AGYFilePresentation.swift Tests/AGYFilePresentationTests.swift -o build/files
 build/files

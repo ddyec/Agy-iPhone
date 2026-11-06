@@ -301,7 +301,7 @@ class Gateway:
             if attached or referenced:
                 cli_prompt = (prompt or "请查看这些引用的文件或文件夹。") + "\n\nReferenced files and directories (full paths identify the selected context; use reading tools as needed; directory references refer to the whole folder, not a preloaded archive):\n" + references
             s["messages"].append({"id": rid, "role": "user", "text": prompt, "attachments": [self.attachment_info(a) for a in attached] + referenced})
-            s["messages"].append({"id": str(uuid.uuid4()), "role": "assistant", "text": "", "tools": []})
+            s["messages"].append({"id": str(uuid.uuid4()), "role": "assistant", "text": "", "tools": [], "finalText": ""})
             if s["name"] == "新会话":
                 s["name"] = prompt.strip()[:40] or (attached + referenced)[0]["name"][:40]
             s["running"], s["error"], s["modified"] = True, "", time.time()
@@ -343,6 +343,7 @@ class Gateway:
                     m["tools"] = tools + [tool]
             if kind == "result":
                 result = event.get("result", {})
+                m["finalText"] = result.get("response") or ""
                 if result.get("response"):
                     m["text"] = result["response"]
                 m["usage"] = result.get("usage", {})

@@ -1,6 +1,8 @@
-# AGY iPhone 1.4.0 · 锁屏与灵动岛任务活动
+# AGY iPhone 1.4.1 · 思考与执行时间线
 
-本版新增任务实时活动：显示任务状态、时长、简短进展与待审批提示，点按打开对应会话。默认隐藏任务内容，设置页可开启预览或关闭实时活动。包含独立 WidgetKit 扩展。
+本版修复灵动岛错位：标识、状态、计时与标题放入同一布局，并移除星星图标。对话默认显示按事件顺序排列的“思考摘要 → 折叠工具组 → 下一段摘要”；执行结束时自动折叠整段过程，最终答复单独展开。摘要只展示 AGY 实际输出的公开进度文字，不生成或推断隐藏推理。
+
+前版新增任务实时活动：显示任务状态、时长、简短进展与待审批提示，点按打开对应会话。默认隐藏任务内容，设置页可开启预览或关闭实时活动。包含独立 WidgetKit 扩展。
 
 当前为本地 ActivityKit 版本：App 切到后台立即显示“待同步”，重新打开后获取真实状态；不含 APNs 推送、后台常驻或后台完成通知。重新签名安装时必须保留并签署 `AGYLiveActivity.appex` 扩展；功能是否可用仍以设备和签名工具为准。
 
@@ -14,7 +16,7 @@
 
 # AGY for iPhone
 
-独立的 SwiftUI 原生 Antigravity CLI 客户端，沿用 [Pi iPhone](https://github.com/ddyec/Pi-iPhone) 的消息展示与界面基础。iOS 17+、仅 iPhone，SVG 原生预览使用固定 SwiftDraw 0.29.0。Bundle ID：`com.ddyec.agy-iphone`，可与 Pi 同时安装。当前源码版本 1.4.0 / build 7。
+独立的 SwiftUI 原生 Antigravity CLI 客户端，沿用 [Pi iPhone](https://github.com/ddyec/Pi-iPhone) 的消息展示与界面基础。iOS 17+、仅 iPhone，SVG 原生预览使用固定 SwiftDraw 0.29.0。Bundle ID：`com.ddyec.agy-iphone`，可与 Pi 同时安装。当前源码版本 1.4.1 / build 8。
 
 App 图标、登录页、欢迎页和消息标识使用 [Google 官方 Antigravity Press Assets](https://antigravity.google/press) 全彩原图；来源与打包说明见 `Brand/README.md`。
 

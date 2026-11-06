@@ -64,6 +64,10 @@ struct AGYDraftAttachment: Identifiable {
         return c.url.absoluteString
     }
     init() {
+        if !UserDefaults.standard.bool(forKey: "nativeTimelineV2") {
+            UserDefaults.standard.set(NativeOutputMode.steps.rawValue, forKey: "nativeOutputMode")
+            UserDefaults.standard.set(true, forKey: "nativeTimelineV2")
+        }
         draft = cache.read("draft-new", as: String.self) ?? ""
         references = cache.read("references-draft-new", as: [AGYFileEntry].self) ?? []
         sessions = cache.read("sessions", as: [AGYSession].self) ?? []

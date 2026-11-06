@@ -4,7 +4,7 @@ enum NativeOutputMode: String, CaseIterable, Identifiable {
     case original, steps, conclusion
     var id: String { rawValue }
     var title: String {
-        switch self { case .original: return "原版"; case .steps: return "步骤摘要"; case .conclusion: return "结论优先" }
+        switch self { case .original: return "原版"; case .steps: return "思考与执行"; case .conclusion: return "结论优先" }
     }
 }
 
@@ -34,6 +34,7 @@ enum NativeConversationPresentation {
             // final. Do not promote an earlier progress message or running text.
             if !active, let last = process.last, last.role == "assistant",
                !last.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+               last.value["presentationKind"].string != "summary",
                !last.content.contains(where: { $0["type"].string == "toolCall" }) {
                 finalMessage = process.removeLast()
             }
@@ -56,5 +57,26 @@ enum NativeConversationPresentation {
         let text = message.text.components(separatedBy: "\n").first(where: { !$0.trimmingCharacters(in: .whitespaces).isEmpty && !$0.hasPrefix("```") })
         if let text { return String(text.trimmingCharacters(in: CharacterSet(charactersIn: "# *>-")).prefix(120)) }
         return message.content.contains(where: { $0["type"].string == "thinking" }) ? "思考过程" : "处理步骤"
+    }
+}
+
+struct NativeProcessSection: Identifiable {
+    enum Kind: Equatable { case summary, tools }
+    let id: String
+    let kind: Kind
+    var messages: [ChatMessage]
+}
+extension NativeConversationPresentation {
+    static func sections(_ process: [ChatMessage]) -> [NativeProcessSection] {
+        var result: [NativeProcessSection] = []
+        for message in process {
+            let tool = message.role == "toolResult" || message.role == "bashExecution" || message.content.contains { $0["type"].string == "toolCall" }
+            if tool, result.last?.kind == .tools {
+                result[result.count - 1].messages.append(message)
+            } else {
+                result.append(NativeProcessSection(id: message.id, kind: tool ? .tools : .summary, messages: [message]))
+            }
+        }
+        return result
     }
 }

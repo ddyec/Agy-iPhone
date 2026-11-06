@@ -14,7 +14,7 @@ import Foundation
         let final = message("f", "assistant", "## 结论\n已修复。")
         let complete = [user, plan, call, result, final]
         let turns = NativeConversationPresentation.turns(complete, live: nil, running: false)
-        check(NativeOutputMode.allCases.map(\.title) == ["原版", "步骤摘要", "结论优先"], "All three modes remain available")
+        check(NativeOutputMode.allCases.map(\.title) == ["原版", "思考与执行", "结论优先"], "All three modes remain available")
         check(turns.count == 1 && turns[0].user?.id == "u", "Group each user turn")
         check(turns[0].conclusion?.id == "f", "Trailing assistant answer is the conclusion")
         check(turns[0].process.map(\.id) == ["p", "call", "r"], "All process details remain available")
@@ -45,6 +45,27 @@ import Foundation
         check(imageRead.content[0]["url"].string == "sandbox:/workspace/p.png", "Image source URL normalized")
         check(NativeMediaReferences.isImage(URL(string: "sandbox:/workspace/p.svg")!), "SVG is an inline image")
         check(NativeMediaReferences.svg("```svg\n<svg width=\"10\" height=\"10\"></svg>\n```") != nil, "SVG source extracted from code")
+        let nextSummary = message("p2", "assistant", "验证通过，接下来整理结果")
+        let sections = NativeConversationPresentation.sections([plan, call, result, nextSummary, message("r2", "toolResult", "output")])
+        check(sections.map(\.kind) == [.summary, .tools, .summary, .tools], "Interleave summaries with consecutive tool groups")
+        check(sections.map { $0.messages.count } == [1, 2, 1, 1], "Tools stay grouped until the next summary")
+        let stoppedSummary = ChatMessage(id: "s", value: .object(["role": .string("assistant"), "presentationKind": .string("summary"), "content": .string("检查中")]))
+        check(NativeConversationPresentation.turns([user, stoppedSummary], live: nil, running: false)[0].conclusion == nil, "A stopped summary never becomes a final answer")
+        let response = AGYMessage(id: "a", role: "assistant", text: "最终答复", tools: [
+            AGYTool(id: "1", name: "read", state: "DONE", parameters: .object([:]), output: "read"),
+            AGYTool(id: "3", name: "write", state: "DONE", parameters: .object([:]), output: "written")], steps: [
+                AGYResponseStep(index: 0, text: "先检查"), AGYResponseStep(index: 2, text: "再修改"),
+                AGYResponseStep(index: 4, text: "最终答复")], finalText: "最终答复")
+        let mapped = response.presented
+        check(mapped.map(\.id) == ["a-step-0", "a-tool-1", "a-step-2", "a-tool-3", "a"], "Preserve AGY event order and avoid duplicate final summary")
+        let completed = NativeConversationPresentation.turns([user] + mapped, live: nil, running: false)[0]
+        check(completed.conclusion?.text == "最终答复" && completed.process.count == 4, "Final answer is outside the whole folded process")
+        let active = NativeConversationPresentation.turns([user] + mapped, live: nil, running: true)[0]
+        check(active.conclusion == nil && active.process.count == 5, "While running, keep all progress in execution order")
+        let noResult = AGYMessage(id: "incomplete", role: "assistant", text: "先检查", tools: [AGYTool(id: "1", name: "read", state: "DONE", parameters: .object([:]), output: "output")], steps: [AGYResponseStep(index: 0, text: "先检查")], finalText: "")
+        check(noResult.presented.map(\.id) == ["incomplete-step-0", "incomplete-tool-1"], "Explicit empty final does not reuse progress as the answer")
+        let repeated = AGYMessage(id: "repeat", role: "assistant", text: "相同文字", tools: [AGYTool(id: "1", name: "read", state: "DONE", parameters: .object([:]), output: "output")], steps: [AGYResponseStep(index: 0, text: "相同文字")], finalText: "相同文字")
+        check(repeated.presented.count == 3, "Preserve identical earlier summary when a tool separates it from the final")
         print("Passed \(checks) conversation presentation and download link checks")
     }
 }

@@ -75,6 +75,7 @@ struct AGYMessage: Codable, Identifiable {
     var tools: [AGYTool]?
     var attachments: [AGYAttachment]?
     var steps: [AGYResponseStep]?
+    var finalText: String?
     var rendered: ChatMessage {
         var blocks: [WireValue] = [.object(["type": .string("text"), "text": .string(text)])]
         for a in attachments ?? [] {
@@ -88,18 +89,37 @@ struct AGYMessage: Codable, Identifiable {
     }
     var presented: [ChatMessage] {
         guard role == "assistant" else { return [rendered] }
+        let orderedSteps = (steps ?? []).sorted { $0.index < $1.index }
+        let lastTool = (tools ?? []).compactMap { Int($0.id) }.max() ?? -1
+        // Old records lack finalText. Infer a final only when its matching text
+        // follows every tool; never move an earlier summary past later actions.
+        let lastResponse = orderedSteps.last
+        let legacyFinal = finalText == nil && (orderedSteps.isEmpty || text != lastResponse?.text || (lastResponse?.index ?? -1) > lastTool)
+        let answer = finalText ?? (legacyFinal ? text : "")
+        let repeatedFinalIndex = orderedSteps.last.flatMap { step -> Int? in
+            step.text.trimmingCharacters(in: .whitespacesAndNewlines) == answer.trimmingCharacters(in: .whitespacesAndNewlines) && step.index > lastTool ? step.index : nil
+        }
         var middle: [(Int, ChatMessage)] = []
         for tool in tools ?? [] {
             middle.append((Int(tool.id) ?? 0, ChatMessage(id: id + "-tool-" + tool.id, value: .object([
-                "role": .string("toolResult"), "toolName": .string(tool.name), "details": tool.parameters,
+                "role": .string("toolResult"), "toolName": .string(tool.name), "toolState": .string(tool.state), "details": tool.parameters,
                 "isError": .bool(tool.isError ?? false), "content": .string("```json\n" + tool.parameters.pretty + "\n```\n" + tool.output)]))))
         }
-        for step in steps ?? [] where !step.text.isEmpty && step.text.trimmingCharacters(in: .whitespacesAndNewlines) != text.trimmingCharacters(in: .whitespacesAndNewlines) {
-            middle.append((step.index, ChatMessage(id: id + "-step-\(step.index)", value: .object(["role": .string("assistant"), "content": .string(step.text)]))))
+        for step in orderedSteps where !step.text.isEmpty && step.index != repeatedFinalIndex {
+            middle.append((step.index, ChatMessage(id: id + "-step-\(step.index)", value: .object([
+                "role": .string("assistant"), "presentationKind": .string("summary"), "content": .string(step.text)]))))
         }
         let process = middle.sorted { $0.0 < $1.0 }.map(\.1)
-        return text.isEmpty ? process : process + [rendered]
+        guard !answer.isEmpty else { return process }
+        var answerMessage = rendered
+        if case .object(var fields) = answerMessage.value {
+            var content = fields["content"]?.array ?? []
+            if !content.isEmpty { content[0] = .object(["type": .string("text"), "text": .string(answer)]) }
+            fields["content"] = .array(content); answerMessage.value = .object(fields)
+        }
+        return process + [answerMessage]
     }
+
 }
 struct AGYSession: Codable, Identifiable {
     let id: String

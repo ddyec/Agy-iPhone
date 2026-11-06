@@ -95,7 +95,7 @@ struct AGYChat: View {
     @State private var showConfiguration = false
     @State private var following = true
     @State private var jumpToLatest = 0
-    @AppStorage("nativeOutputMode") private var outputMode = NativeOutputMode.original.rawValue
+    @AppStorage("nativeOutputMode") private var outputMode = NativeOutputMode.steps.rawValue
     @State private var showFiles = false
     @State private var attachmentPicker: AGYAttachmentPicker?
     @State private var pickerContext = UUID()
@@ -123,7 +123,7 @@ struct AGYChat: View {
                             NativeConversationTurns(turns: NativeConversationPresentation.turns(store.presentedMessages, live: nil, running: store.selected?.running ?? false), mode: NativeOutputMode(rawValue: outputMode) ?? .original)
                         }
                         ForEach(store.selected?.approvals ?? []) { request in AGYApprovalCard(request: request) }
-                        if store.selected?.running == true { HStack { ProgressView(); Text("AGY 正在工作…").font(.callout).foregroundStyle(.secondary) }.padding(10) }
+                        if store.selected?.running == true && outputMode == NativeOutputMode.original.rawValue { HStack { ProgressView(); Text("AGY 正在工作…").font(.callout).foregroundStyle(.secondary) }.padding(10) }
                         if let issue = store.error { Label(issue, systemImage: "wifi.exclamationmark").font(.callout).foregroundStyle(.red).textSelection(.enabled) }
                         if let error = store.selected?.error, !error.isEmpty { Label(error, systemImage: "exclamationmark.circle").font(.callout).foregroundStyle(.orange).textSelection(.enabled) }
                         if store.pending != nil {
