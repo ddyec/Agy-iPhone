@@ -1,3 +1,9 @@
+## 1.4.1 local save correction (same delivery)
+
+The user reported choosing an export destination but finding no file. The former export picker had no delegate/completion/error handling, and downloads only lived in a temporary preview folder. Downloads now keep a verified persistent copy in Documents/下载, exposed via Files using UIFileSharingEnabled + LSSupportsOpeningDocumentsInPlace. Credentials and account caches remain outside Documents.
+
+“存储到文件” now selects a folder, retains security-scoped access during an NSFileCoordinator write, copies through a staging file, verifies the written size/existence, and reports success only after the move completes. Failure is visible; cancellation is not success. Existing names receive numeric suffixes without overwriting. The Files page has a local-download list and previews remain backed by persistent files. Added native regressions for source-temp removal, binary/Unicode preservation, chosen-folder export, collisions and missing-source failure. Actual third-party File Provider behavior still requires iPhone verification. The selected-folder flow follows [Apple directory access requirements](https://developer.apple.com/documentation/uikit/providing-access-to-directories).
+
 ## AGY 1.4.1 layout and ordered process correction
 
 Replaced separate expanded-island center/trailing regions with one aligned card containing mark/status/timer/title. Compact mode now shows elapsed time or approval/sync text, with no sparkle symbol. Device-specific rendering still needs iPhone verification.

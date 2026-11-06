@@ -31,6 +31,7 @@ struct AGYFiles: View {
         NavigationStack {
             List {
                 Section {
+                    NavigationLink { AGYLocalDownloads() } label: { Label("本机已下载", systemImage: "arrow.down.circle") }
                     Picker("文件来源", selection: $scope) {
                         Text("工作区").tag("workspace")
                         Text("已上传").tag("uploads")

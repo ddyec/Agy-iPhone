@@ -72,13 +72,11 @@ final class AGYExternalRedirectPolicy: NSObject, URLSessionTaskDelegate {
         return try protect(temporary, name: NativeFileRules.safeFilename(name ?? path))
     }
     private func protect(_ temporary: URL, name: String) throws -> URL {
-        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("AGYPreviews/\(UUID().uuidString)")
-        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-        let target = folder.appendingPathComponent(name)
-        try FileManager.default.moveItem(at: temporary, to: target)
-        try FileManager.default.setAttributes([.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication], ofItemAtPath: target.path)
-        return target
+        let saved = try NativeLocalFileStore.persist(temporary, name: name)
+        try? FileManager.default.removeItem(at: temporary)
+        return saved
     }
+
     func downloadExternal(_ url: URL) async throws -> URL {
         guard NativeDownloadLinks.isExternalFile(url) else { throw AGYError.message("不支持此下载地址") }
         let configuration = URLSessionConfiguration.ephemeral

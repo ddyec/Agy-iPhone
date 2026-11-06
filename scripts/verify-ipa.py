@@ -21,6 +21,8 @@ with zipfile.ZipFile(path) as z:
     assert 'Payload/AGY.app/MobileLayout.js' not in z.namelist(), 'Legacy webpage adapter must not ship'
     assert 'Payload/AGY.app/InboxBridge.js' not in z.namelist(), 'Legacy JavaScript bridge must not ship'
     assert 'Payload/AGY.app/Assets.car' in z.namelist()
+    assert info.get('UIFileSharingEnabled') is True, 'Local downloads not exposed in Files'
+    assert info.get('LSSupportsOpeningDocumentsInPlace') is True, 'Files document access missing'
     assert info.get('NSSupportsLiveActivities') is True, 'Live Activities support missing'
     extension = 'Payload/AGY.app/PlugIns/AGYLiveActivity.appex/'
     widget = plistlib.loads(z.read(extension + 'Info.plist'))
