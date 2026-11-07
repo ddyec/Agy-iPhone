@@ -1,75 +1,71 @@
-# AGY iPhone 1.4.2 · 紧凑实时活动
-
-本版收紧实时活动：展开态的标识、状态与计时移到摄像头两侧，下方只留一行任务标题；缩小上下边距和紧凑态宽度，锁屏卡片也缩小图标及行距。系统控制的摄像头区域与展开外轮廓不做负边距覆盖。
-
-前版同时修复本地保存流程：下载文件持久保存在“文件 App → 我的 iPhone → AGY → 下载”；“存储到文件”选定文件夹后由 App 协调写入并校验，成功/失败明确提示，同名文件另存、不覆盖原件。“文件”页新增“本机已下载”入口。
-
-本版修复灵动岛错位：标识、状态、计时与标题放入同一布局，并移除星星图标。对话默认显示按事件顺序排列的“思考摘要 → 折叠工具组 → 下一段摘要”；执行结束时自动折叠整段过程，最终答复单独展开。摘要只展示 AGY 实际输出的公开进度文字，不生成或推断隐藏推理。
-
-前版新增任务实时活动：显示任务状态、时长、简短进展与待审批提示，点按打开对应会话。默认隐藏任务内容，设置页可开启预览或关闭实时活动。包含独立 WidgetKit 扩展。
-
-当前为本地 ActivityKit 版本：App 切到后台立即显示“待同步”，重新打开后获取真实状态；不含 APNs 推送、后台常驻或后台完成通知。重新签名安装时必须保留并签署 `AGYLiveActivity.appex` 扩展；功能是否可用仍以设备和签名工具为准。
-
-前版已补齐模型（含思考强度）、审批策略、执行方式及工作区的本机记忆，按服务器和账号隔离保存。新对话使用上次主动修改的配置；查看旧会话不会改写默认值。模型不可用时回退到服务器可用模型，工作区超出允许范围或连接时不可访问时返回默认工作区。此修复需安装新版客户端，服务器升级不能替代。
-
-原生“文件”页：浏览工作文件、从文件/相册上传、下载并预览产物、保存到 iPhone 文件 App。输入 `@` 或点击文件行的 `@`，可引用文件或整个文件夹。手机只显示相对路径，不需要输入服务器路径。目录引用保留整个文件夹的路径，AGY 按需读取，不预先展开全部内容。
-
-需配套部署本包网关；旧网关会提示升级。工作区沿用部署时的允许目录，用户可通过文件夹浏览选择新会话的项目。上传文件集中存放在会话上传区，上传本身不会发送任务。下载单个文件上限 25 MiB；目前没有目录 ZIP 下载、文件删除/移动功能。
-
-已授权尝试 GitHub Actions 构建。沿用仓库现有 push/手动触发工作流，运行后端与原生组件测试，再归档 iPhone IPA。具体执行结果以 Actions 运行记录为准。此次构建不切换线上账号或重启网关。
-
 # AGY for iPhone
 
-独立的 SwiftUI 原生 Antigravity CLI 客户端，沿用 [Pi iPhone](https://github.com/ddyec/Pi-iPhone) 的消息展示与界面基础。iOS 17+、仅 iPhone，SVG 原生预览使用固定 SwiftDraw 0.29.0。Bundle ID：`com.ddyec.agy-iphone`，可与 Pi 同时安装。当前源码版本 1.4.2 / build 9。
+基于 SwiftUI 编写的 **Antigravity CLI 原生 iPhone 客户端**（支持 iOS 17+）。
 
-App 图标、登录页、欢迎页和消息标识使用 [Google 官方 Antigravity Press Assets](https://antigravity.google/press) 全彩原图；来源与打包说明见 `Brand/README.md`。
+采用纯原生界面实现聊天、模型与思考强度切换、工具审批、文件浏览上传与灵动岛实时活动，不依赖网页套壳。应用 Bundle ID 为 `com.ddyec.agy-iphone`，可与 [Pi for iPhone](https://github.com/ddyec/Pi-iPhone) 同时安装。
 
-聊天、模型选择、历史、工具详情与设置均为原生界面，不加载桌面网页。输入框跟随键盘与安全区，支持深浅色、动态字体、复制、分享、Markdown、代码和表格。
+---
 
-## 本次本地交付
+## 主要功能
 
-此前按要求交付源码 ZIP；现已授权推送并尝试一次手动 Actions 构建。此次推送会由现有工作流触发一次构建，不再额外手动触发。Mac 本地构建：
+- **思考与执行时间线**：
+  - 对话流按实际执行顺序展示“思考摘要 → 可折叠工具调用组 → 下一段思考”，任务完成后自动收起中间执行过程，突出最终回复。
+  - 原生支持 Markdown、代码块自动换行与复制、表格、图片放大查看，以及基于 SwiftDraw 的 SVG 原生矢量预览。
+  - 手势感知滚动：手动向上翻阅历史消息时自动停止底部跟随，避免阅读被流式输出打断。
+- **锁屏与灵动岛实时活动（Live Activities）**：
+  - 实时显示当前任务的运行状态、耗时、最新进展与待审批提醒，点击即可回到对应会话。
+  - 默认隐藏具体任务正文以保护隐私，可在设置中开启内容预览或关闭实时活动。
+- **原生文件页与 `@` 引用**：
+  - 在“文件”标签页直接浏览服务器工作区、从系统相册或“文件”App 上传附件、预览或下载生成的产物。
+  - 下载的文件保存在“文件 App → 我的 iPhone → AGY → 下载”，也可选择“存储到文件”写入任意目录（自动校验写入结果，同名文件自动另存，不覆盖原文件）。
+  - 在输入框输入 `@` 或在文件列表中点击 `@`，即可在对话中引用单个文件或整个文件夹。
+- **模型、思考强度与审批策略**：
+  - 先选择模型，再选择该模型支持的思考强度（对应 CLI 的 `--model` 与 `--effort`）。
+  - **审批模式**：支持 **Restriction Mode**（每次工具调用弹出原生允许/拒绝卡片）与 **Turbo Mode**（自动执行常规操作）。
+  - **执行方式**：独立切换“先做计划”与“直接实施”。
+  - 所有偏好设置按服务器地址与账号独立记忆。
 
-```sh
+---
+
+## 服务端部署与多账号管理
+
+客户端需配合本仓库 `Server/` 目录下的网关使用。网关支持多账号隔离，每个账号使用独立的 CLI HOME 与会话数据库，互不干扰。
+
+管理账号命令（详见 [ACCOUNT_LOGIN.md](ACCOUNT_LOGIN.md)）：
+
+```bash
+python3 scripts/account.py create <account-name>
+python3 scripts/account.py login <account-name>
+python3 scripts/account.py check <account-name>
+```
+
+网关默认仅监听本机回环地址，通过 Cloudflare Tunnel 等方式对外提供 HTTPS 访问。详细接口协议说明见 [Server/API.md](Server/API.md)（要求 AGY CLI 1.4.10 及以上版本）。
+
+---
+
+## 构建与安装
+
+### GitHub Actions 自动构建
+推送代码或手动运行工作流会自动执行后端与核心测试，并归档生成待重签的 `AGY-iPhone.ipa`。
+
+### Mac 本地构建
+需要 Xcode 与 iOS 17+ SDK：
+
+```bash
 bash scripts/check-local.sh
 bash scripts/package.sh
 ```
 
-Linux 本地只验证后端、Swift 语法和隔离 CLI 能力；Xcode 类型检查、iPhone 归档及真机交互仍需在 Mac/手机完成。
+> **重签注意事项**：使用自签工具签名安装时，请务必保留并一并签署 `AGYLiveActivity.appex` 扩展，以确保灵动岛与锁屏实时活动正常可用。
 
-## 新配置逻辑
+---
 
-- 先选模型名称，再选该模型实际支持的思考强度，后端分别传 `--model` 与 `--effort`。
-- Restriction Mode：每次工具操作都有原生允许/拒绝卡片；失联、超时和停止时拒绝，不缓存始终允许。
-- Turbo Mode：通过 CLI 的单次设置自动执行。明确的 ask/deny 规则依然有效。
-- “先做计划／直接实施”是另一项执行方式，独立于审批策略。
-- PI 新版的三种输出展示、代码换行、完整表格、Unicode 文件链接、原生下载/保存/分享、图片和 SVG 预览、按本地日期分组历史、会话缓存与草稿已适配。
-- PI 和 AGY 共用新的手势感知滚动跟随器；手动查看历史时不再由刷新、懒加载标记或键盘事件重新启用跟随。
+## 相关文档与声明
 
-逐项差异和未移植项见 [PI_COMPARISON.md](PI_COMPARISON.md)。
+- [与 Pi 客户端的功能对照](PI_COMPARISON.md)
+- [接口协议说明](Server/API.md)
+- [账号登录与切换指南](ACCOUNT_LOGIN.md)
+- [品牌资源来源说明](Brand/README.md)
+- [测试与验证记录](VALIDATION.md)
 
-## 新账号与配套后端
-
-**新 App 必须配套本包后端。现有线上网关未重启、未切换到本版，旧登录未注销。** 新账号采用独立 CLI HOME，账号凭据和会话数据库分开，不覆盖共享 AGY 或 PI 的登录。具体操作见 [ACCOUNT_LOGIN.md](ACCOUNT_LOGIN.md)。
-
-```sh
-python3 scripts/account.py create new-account
-python3 scripts/account.py login new-account
-python3 scripts/account.py check new-account
-```
-
-准备好新账号后按说明切换后端；`https://agy.yectech.uk` 和原网关密钥可继续使用。Google OAuth、Cloudflare Token、连接密钥均不在源码包内。
-
-模型、审批和文件协议见 [Server/API.md](Server/API.md)。最少需要支持 `--settings` 的 AGY CLI 1.4.10+。网关只监听本机，由现有命名隧道提供 HTTPS。
-
-## 保留功能与边界
-
-原生聊天、图片/文件上传、流式同步、历史重命名/删除、模型与工作目录选择、工具详情、停止、断线恢复、请求去重、账户真实额度都保留。输入框左侧“+”选择照片/文件，单个 25 MiB、最多 8 个、合计 50 MiB；照片方向修正后缩至 2048 像素 JPEG，文档保留字节。
-
-AGY 使用自己的文件/图片工具读取上传文件；不把图片静默丢成纯文本。服务端文件下载限定到当前会话工作目录及自身产物目录，外部下载不带网关认证。手机退出或断网不重发原 prompt；服务器重启标记中断，不自动重新执行。
-
-官方 Remote Control 会话导入、PI 的压缩/树分支 RPC、技能/插件管理、APNs 和任意扩展 TUI 没有对应移植，不显示虚假的可用状态。普通源文件浏览/管理不是本次产物下载接口的功能。
-
-Google 标识的原始来源见 [Brand/README.md](Brand/README.md)。这是独立客户端，不是 Google 官方 iOS App。
-
-验证证据与未验证范围见 [VALIDATION.md](VALIDATION.md)。
+> 本项目为个人开发的独立第三方客户端，非 Google 官方应用；应用内使用的 Antigravity 品牌图标源自 [Google Antigravity Press Assets](https://antigravity.google/press)。
