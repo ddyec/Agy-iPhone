@@ -12,7 +12,7 @@ import Foundation
     }
     @Published private(set) var issue: String?
     var available: Bool { ActivityAuthorizationInfo().areActivitiesEnabled }
-    private enum Input { case session(AGYSession, String, Bool), pause, clear }
+    private enum Input { case session(AGYSession, String, Bool, Bool), pause, clear }
     private var needsClear = false
     private var pending: Input?
     private var worker: Task<Void, Never>?
@@ -30,7 +30,7 @@ import Foundation
     func resumeSession(scope: String) -> String? {
         active().first(where: { $0.attributes.scope == scope })?.attributes.sessionID
     }
-    func update(_ session: AGYSession, scope: String, foreground: Bool) { enqueue(.session(session, scope, foreground)) }
+    func update(_ session: AGYSession, scope: String, foreground: Bool, backgroundSync: Bool = false) { enqueue(.session(session, scope, foreground, foreground || backgroundSync)) }
     func pause() { enqueue(.pause) }
     func clear() { needsClear = true; enqueue(.clear) }
     private func enqueue(_ input: Input) {
@@ -74,8 +74,8 @@ import Foundation
         Activity<AGYActivityAttributes>.activities.filter { $0.activityState == .active || $0.activityState == .stale }
     }
     private func pause(_ activity: Activity<AGYActivityAttributes>) async {
-        var state = activity.content.state
-        state.phase = "paused"; state.detail = "打开 AGY 同步最新进展"
+        let state = activity.content.state
+        // Keep the last known phase and its timestamp; stale UI identifies it as historical.
         await activity.update(ActivityContent(state: state, staleDate: Date()))
     }
     private func apply(_ input: Input) async {
@@ -88,7 +88,7 @@ import Foundation
             for activity in Activity<AGYActivityAttributes>.activities { await activity.end(nil, dismissalPolicy: .immediate) }
         case .pause:
             for activity in active() { await pause(activity) }
-        case .session(let session, let scope, let foreground):
+        case .session(let session, let scope, let foreground, let canUpdate):
             guard !scope.isEmpty else { return }
             // Account/server changes must remove old lock-screen content.
             for activity in Activity<AGYActivityAttributes>.activities where activity.attributes.scope != scope {
@@ -96,7 +96,7 @@ import Foundation
             }
             guard let task = session.messages?.last(where: { $0.role == "user" }) else { return }
             let matching = active().first { $0.attributes.sessionID == session.id && $0.attributes.taskID == task.id }
-            guard foreground else { for activity in active() { await pause(activity) }; return }
+            guard canUpdate else { for activity in active() { await pause(activity) }; return }
             guard session.running || matching != nil else {
                 // Viewing an idle conversation does not finish another task.
                 for activity in active() { await pause(activity) }
@@ -104,15 +104,15 @@ import Foundation
             }
             let start = matching?.attributes.startedAt ?? Date(timeIntervalSince1970: min(Date().timeIntervalSince1970, session.modified))
             let message = session.messages?.last(where: { $0.role == "assistant" })
-            let progress = message?.steps?.last?.text ?? message?.text ?? ""
+            let progress = message?.steps?.last?.thinking ?? message?.steps?.last?.text ?? message?.text ?? ""
             let state = AGYActivityPolicy.state(running: session.running, approvalCount: session.approvals?.count ?? 0,
                                                 error: session.error, title: session.name, progress: progress,
                                                 previews: previews, startedAt: start, now: Date())
-            let content = ActivityContent(state: state, staleDate: session.running ? Date().addingTimeInterval(45) : nil)
+            let content = ActivityContent(state: state, staleDate: session.running ? Date().addingTimeInterval(AGYActivityRefreshPolicy.staleInterval) : nil)
             if let matching {
                 if session.running { await matching.update(content) }
                 else { await matching.end(content, dismissalPolicy: .after(Date().addingTimeInterval(90))) }
-            } else if session.running, available {
+            } else if session.running, foreground, available {
                 for activity in Activity<AGYActivityAttributes>.activities { await activity.end(nil, dismissalPolicy: .immediate) }
                 do {
                     let attributes = AGYActivityAttributes(sessionID: session.id, taskID: task.id, scope: scope, startedAt: start)

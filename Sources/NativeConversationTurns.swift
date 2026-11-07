@@ -37,7 +37,14 @@ private struct NativeTurnTimeline: View {
     private var process: some View {
         VStack(alignment: .leading, spacing: 14) {
             ForEach(NativeConversationPresentation.sections(turn.process)) { section in
-                if section.kind == .summary {
+                if section.kind == .guidance {
+                    ForEach(section.messages) { message in
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("你在执行中补充的引导").font(.caption).foregroundStyle(.secondary)
+                            NativeMessageRow(message: message)
+                        }
+                    }
+                } else if section.kind == .summary {
                     ForEach(section.messages) { message in
                         NativeSummaryCard(message: message)
                             .id(message.id + (turn.running ? "-working" : "-finished"))

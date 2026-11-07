@@ -11,9 +11,10 @@ import uuid
 
 
 class ApprovalBridge:
-    def __init__(self, path, changed, timeout=540):
+    def __init__(self, path, changed, timeout=540, guidance=None):
         self.path = str(path)
         self.changed = changed
+        self.guidance = guidance
         self.timeout = timeout
         self.lock = threading.RLock()
         self.tokens = {}
@@ -26,6 +27,12 @@ class ApprovalBridge:
                     line = self.rfile.readline(256 * 1024 + 1)
                     if len(line) > 256 * 1024: raise ValueError()
                     value = json.loads(line)
+                    if value.get("operation") == "steering":
+                        with bridge.lock:
+                            sid = bridge.tokens.get(value.get("token", ""))
+                            steps = bridge.guidance(sid) if sid is not None and bridge.guidance else []
+                        self.wfile.write(json.dumps({"injectSteps":steps},ensure_ascii=False).encode()+b"\n")
+                        return
                     reply = bridge.wait(value.get("token", ""), value.get("payload", {}))
                 except Exception:
                     reply = "deny"

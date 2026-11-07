@@ -19,7 +19,7 @@ struct AGYTaskWidget: Widget {
                 DynamicIslandExpandedRegion(.leading) {
                     HStack(spacing: 6) {
                         Image("AntigravityMark").resizable().scaledToFit().frame(width: 18, height: 18)
-                        Text(context.isStale ? "待同步" : context.state.label)
+                        Text(context.isStale ? "最近状态" : context.state.label)
                             .font(.caption2).foregroundStyle(.secondary).lineLimit(1)
                     }.frame(height: 20, alignment: .center)
                 }
@@ -54,13 +54,16 @@ private struct AGYActivityCard: View {
             Image("AntigravityMark").resizable().scaledToFit().frame(width: 24, height: 24).padding(.top, 1)
             VStack(alignment: .leading, spacing: 3) {
                 HStack(alignment: .firstTextBaseline) {
-                    Text(context.isStale ? "待同步" : context.state.label).font(.caption).foregroundStyle(.secondary)
+                    Text(context.isStale ? "最近状态" : context.state.label).font(.caption).foregroundStyle(.secondary)
                     Spacer(minLength: 12)
                     AGYActivityElapsed(context: context).frame(width: 65, alignment: .trailing)
                 }
                 Text(context.state.title).font(.subheadline.weight(.semibold)).lineLimit(1).frame(maxWidth: .infinity, alignment: .leading)
                 if context.isStale {
-                    Text("点按返回 AGY 同步").font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                    HStack(spacing: 4) {
+                        Text("更新于")
+                        Text(context.state.updatedAt, style: .time)
+                    }.font(.caption2).foregroundStyle(.secondary)
                 } else if !context.state.detail.isEmpty, context.state.detail != "点按返回会话" {
                     Text(context.state.detail).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
                 }
@@ -76,7 +79,7 @@ private struct AGYActivityElapsed: View {
             if context.state.finished {
                 Text(String(format: "%d:%02d", context.state.elapsed / 60, context.state.elapsed % 60))
             } else if context.isStale || context.state.phase == "paused" {
-                Text("待同步")
+                Text(String(format: "%d:%02d", context.state.elapsed / 60, context.state.elapsed % 60))
             } else {
                 Text(context.attributes.startedAt, style: .timer)
             }

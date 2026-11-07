@@ -69,6 +69,10 @@ import Foundation
         let thinking = AGYMessage(id: "thought", role: "assistant", text: "done", tools: [AGYTool(id: "1", name: "read", state: "DONE", parameters: .object([:]), output: "output")], steps: [AGYResponseStep(index: 0, text: "", thinking: "先核对依赖"), AGYResponseStep(index: 2, text: "done", thinking: "检查完毕")], finalText: "done")
         check(thinking.presented.map(\.id) == ["thought-thinking-0", "thought-tool-1", "thought-thinking-2", "thought"], "Preserve provider-supplied thinking between tools, including textless steps")
         check(NativeConversationPresentation.summaryExcerpt("第一段\n\n第二段") == "第一段…", "Summary excerpts use source text only")
+        let guided = AGYMessage(id: "guided", role: "assistant", text: "完成", tools: [AGYTool(id: "1", name: "read", state: "DONE", parameters: .object([:]), output: "output")], steps: [AGYResponseStep(index: 0, text: "先检查")], finalText: "完成", guidance: [AGYGuidance(id: "guidance-1", index: 1, text: "注意兼容旧版本")])
+        let guidedTurns = NativeConversationPresentation.turns([user]+guided.presented, live: nil, running: false)
+        check(guidedTurns.count == 1 && guidedTurns[0].conclusion?.text == "完成", "Mid-turn guidance stays inside the same process and does not split the answer")
+        check(NativeConversationPresentation.sections(guidedTurns[0].process).map(\.kind) == [.summary, .guidance, .tools], "Guidance is distinguishable from provider summaries")
         print("Passed \(checks) conversation presentation and download link checks")
     }
 }

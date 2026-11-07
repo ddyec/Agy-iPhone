@@ -37,7 +37,7 @@ final class AGYExternalRedirectPolicy: NSObject, URLSessionTaskDelegate {
         // Match the mobile client identity used by the existing Pi app so the
         // origin's Browser Integrity Check accepts native API requests.
         let os = UIDevice.current.systemVersion.replacingOccurrences(of: ".", with: "_")
-        let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.4.2"
+        let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.5.0"
         request.setValue("Mozilla/5.0 (iPhone; CPU iPhone OS \(os) like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148 AGY-iPhone/\(version)", forHTTPHeaderField: "User-Agent")
         if let body { request.httpBody = try JSONEncoder().encode(body); request.setValue("application/json", forHTTPHeaderField: "Content-Type") }
         return request
@@ -87,6 +87,13 @@ final class AGYExternalRedirectPolicy: NSObject, URLSessionTaskDelegate {
         let (temporary, response) = try await external.download(from: url)
         try validate(response)
         return try protect(temporary, name: NativeFileRules.safeFilename(response.suggestedFilename ?? url.lastPathComponent))
+    }
+    func sessionSnapshot(_ id: String) async throws -> AGYSession {
+        var req = try request("sessions/\(id)")
+        req.timeoutInterval = 8
+        let (data, response) = try await session.data(for: req)
+        try validate(response, data: data)
+        return try JSONDecoder().decode(AGYSession.self, from: data)
     }
     func events(_ id: String, receive: @escaping (AGYSession) -> Void) async throws {
         var req = try request("sessions/\(id)/events")

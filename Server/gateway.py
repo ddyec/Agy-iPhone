@@ -20,6 +20,7 @@ from urllib.parse import urlsplit, parse_qs, quote
 import catalog
 import profiles
 from approvals import ApprovalBridge
+from followups import Followups
 
 MAX_BODY = 256 * 1024
 MAX_FILE = 25 * 1024 * 1024
@@ -33,6 +34,9 @@ class Failure(Exception):
 
 
 class Gateway:
+    failure_type = Failure
+    max_attachments = MAX_ATTACHMENTS
+    max_total = MAX_TOTAL
     def __init__(self, directory, key, binary, roots, default_model="", command_prefix=None, profile_home=None):
         self.directory = Path(directory)
         self.directory.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -57,13 +61,14 @@ class Gateway:
         self.db.execute("CREATE TABLE IF NOT EXISTS requests (id TEXT PRIMARY KEY, session TEXT NOT NULL, digest TEXT NOT NULL)")
         self.db.execute("CREATE TABLE IF NOT EXISTS attachments (id TEXT PRIMARY KEY, session TEXT NOT NULL, data TEXT NOT NULL)")
         self.db.commit()
+        self.followups = Followups(self)
         self.models_cache = None
         self.limits_cache = None
         self.review = None
         self.review_directory = None
         if self.profile_home:
             self.review_directory = tempfile.TemporaryDirectory(prefix="agy-review-")
-            self.review = ApprovalBridge(Path(self.review_directory.name)/"gate.sock", self.approvals_changed)
+            self.review = ApprovalBridge(Path(self.review_directory.name)/"gate.sock", self.approvals_changed, guidance=self.followups.claim)
         # Never resubmit an admitted prompt after a crash/restart.
         for s in self.sessions():
             if s["running"]:
@@ -89,6 +94,7 @@ class Gateway:
             value.setdefault("baseModel", value["model"][:-(len(effort)+1)] if value["effort"] else value["model"])
             value.setdefault("approvalMode", "legacy")
             value.setdefault("approvals", [])
+            value["inbox"] = self.followups.snapshot(sid)
             return value
 
     def sessions(self):
@@ -255,6 +261,10 @@ class Gateway:
         return self.get(sid)
 
     def submit(self, sid, body):
+        if body.get("delivery") in ("queue", "steer"):
+            return self.followups.add(sid, body)
+        if body.get("delivery") not in (None, "normal"):
+            raise Failure(400, "发送方式无效")
         prompt = body.get("text", "")
         rid = body.get("requestID", "")
         attachment_ids = body.get("attachments", [])
@@ -391,6 +401,8 @@ class Gateway:
                 self.ingest(sid, event)
                 terminal |= event.get("event") == "result"
             code = process.wait(timeout=10)
+            if terminal and code != 0:
+                failure = f"AGY 异常退出（{code}），请核对会话，后续排队已暂停。"
             if not terminal:
                 failure = f"AGY 提前结束（{code}）。请检查服务器登录、模型与执行权限。"
         except Exception as error:
@@ -416,6 +428,7 @@ class Gateway:
                 self.processes.pop(sid, None)
                 self.active.discard(sid)
                 self.stopping.discard(sid)
+                self.followups.finished(sid, not bool(s.get("error")))
 
     @staticmethod
     def terminate(process):
@@ -646,6 +659,7 @@ class Gateway:
         with self.lock:
             if self.get(sid)["running"] or sid in self.active:
                 raise Failure(409, "请先停止任务")
+            self.db.execute("DELETE FROM inbox WHERE session=?", (sid,))
             self.db.execute("DELETE FROM sessions WHERE id=?", (sid,))
             self.db.commit()
 
@@ -708,7 +722,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self.respond(200, {"name": "AGY", "version": 1, "roots": list(map(str, gateway.roots)),
                                           "defaultModel": gateway.default_model, "conversationScope": "gateway",
                                           "accountProfile": gateway.account_profile,
-                                          "capabilities": {"separateEffort": True, "nativeApprovals": gateway.review is not None, "artifacts": True, "fileBrowser": True, "directoryMentions": True, "projectSnapshots": True}})
+                                          "capabilities": {"separateEffort": True, "nativeApprovals": gateway.review is not None, "artifacts": True, "fileBrowser": True, "directoryMentions": True, "projectSnapshots": True, "queue": True, "steering": gateway.review is not None}})
             if self.command == "GET" and path == "/v1/models":
                 models = gateway.models(refresh=query.get("refresh") == ["1"])
                 return self.respond(200, {"models": models, "families": catalog.families(models)})
@@ -720,6 +734,9 @@ class Handler(BaseHTTPRequestHandler):
                     return self.respond(200, {"sessions": sessions})
                 if self.command == "POST":
                     return self.respond(201, gateway.create(body))
+            inbox = re.fullmatch(r"/v1/sessions/([a-f0-9-]{36})/inbox/([a-f0-9-]{36})", path)
+            if inbox and self.command in ("DELETE", "PATCH"):
+                return self.respond(200, gateway.followups.change(inbox[1], inbox[2], "cancel" if self.command=="DELETE" else body.get("action")))
             approval = re.fullmatch(r"/v1/sessions/([a-f0-9-]{36})/approvals/([a-f0-9-]{36})", path)
             if approval and self.command == "POST":
                 return self.respond(200, gateway.answer_approval(approval[1], approval[2], body.get("decision")))

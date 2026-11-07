@@ -25,6 +25,10 @@ import Foundation
         precondition(AGYActivityPolicy.session(from: URL(string: "agy://session/\(id)?scope=account-A&scope=account-A")!, scope: "account-A") == nil)
         let encoded = try JSONEncoder().encode(state(previews: true))
         precondition(encoded.count < 4096)
+        precondition(AGYActivityRefreshPolicy.shouldSynchronize(foreground: true, hasBackgroundTime: false, running: true))
+        precondition(AGYActivityRefreshPolicy.shouldSynchronize(foreground: false, hasBackgroundTime: true, running: true))
+        precondition(!AGYActivityRefreshPolicy.shouldSynchronize(foreground: false, hasBackgroundTime: false, running: true))
+        precondition(!AGYActivityRefreshPolicy.shouldSynchronize(foreground: true, hasBackgroundTime: true, running: false))
         print("Live Activity state, privacy, payload bounds and deep-link checks passed")
     }
 }

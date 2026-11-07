@@ -22,7 +22,7 @@ enum NativeConversationPresentation {
         if let live { all.append(live) }
         var groups: [[ChatMessage]] = []
         for message in all {
-            if groups.isEmpty || message.role == "user" { groups.append([]) }
+            if groups.isEmpty || (message.role == "user" && message.value["presentationKind"].string != "guidance") { groups.append([]) }
             groups[groups.count - 1].append(message)
         }
         return groups.enumerated().map { index, group in
@@ -61,7 +61,7 @@ enum NativeConversationPresentation {
 }
 
 struct NativeProcessSection: Identifiable {
-    enum Kind: Equatable { case summary, tools }
+    enum Kind: Equatable { case summary, tools, guidance }
     let id: String
     let kind: Kind
     var messages: [ChatMessage]
@@ -76,6 +76,10 @@ extension NativeConversationPresentation {
     static func sections(_ process: [ChatMessage]) -> [NativeProcessSection] {
         var result: [NativeProcessSection] = []
         for message in process {
+            if message.value["presentationKind"].string == "guidance" {
+                result.append(NativeProcessSection(id: message.id, kind: .guidance, messages: [message]))
+                continue
+            }
             let tool = message.role == "toolResult" || message.role == "bashExecution" || message.content.contains { $0["type"].string == "toolCall" }
             if tool, result.last?.kind == .tools {
                 result[result.count - 1].messages.append(message)

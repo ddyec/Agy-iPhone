@@ -30,6 +30,11 @@ def prepare(home):
     hook = Path(__file__).with_name("review_hook.py").resolve()
     hooks["agy-iphone-native-review"] = {"PreToolUse": [{"matcher": "*", "hooks": [{
         "type": "command", "command": shlex.quote(sys.executable) + " " + shlex.quote(str(hook)), "timeout": 600}]}]}
+    steering = Path(__file__).with_name("steering_hook.py").resolve()
+    command = shlex.quote(sys.executable) + " " + shlex.quote(str(steering))
+    hooks["agy-iphone-guidance"] = {
+        "PreInvocation": [{"type":"command", "command":command, "timeout":15}],
+        "PostInvocation": [{"type":"command", "command":command + " --after", "timeout":15}]}
     hooks_file.write_text(json.dumps(hooks, indent=2))
     hooks_file.chmod(0o600)
     return json.loads(identity.read_text())["id"]

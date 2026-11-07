@@ -1,5 +1,6 @@
 import SwiftUI
 import PhotosUI
+import UIKit
 
 struct AGYDraftAttachment: Identifiable {
     let id = UUID()
@@ -16,6 +17,8 @@ struct AGYDraftAttachment: Identifiable {
     @Published var models: [AGYModel] = []
     @Published var families: [AGYModelFamily] = []
     @Published var approvalMode = "review"
+    @Published var queueReady = false
+    @Published var steeringReady = false
     @Published var fileBrowserReady = false
     @Published var gatewayReady = false
     @Published var approvalBusy = false
@@ -41,6 +44,9 @@ struct AGYDraftAttachment: Identifiable {
     let cache = NativeCache()
     let liveActivity = AGYLiveActivity()
     private var streamTask: Task<Void, Never>?
+    private var heartbeatTask: Task<Void, Never>?
+    private var backgroundDeadline: Task<Void, Never>?
+    private var backgroundID: UIBackgroundTaskIdentifier = .invalid
     private var epoch = UUID()
     private var selectionEpoch = UUID()
     private var foreground = true
@@ -52,8 +58,9 @@ struct AGYDraftAttachment: Identifiable {
         let text: String
         var attachments: [String]?
         var references: [String]?
+        var delivery: String?
     }
-    var canSend: Bool { connected && gatewayReady && (references.isEmpty || fileBrowserReady) && !busy && !importing && selected?.running != true && pending == nil && (!draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !attachments.isEmpty || !references.isEmpty) }
+    var canSend: Bool { connected && gatewayReady && (references.isEmpty || fileBrowserReady) && !busy && !importing && pending == nil && (selected?.running != true || queueReady) && (!draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !attachments.isEmpty || !references.isEmpty) }
     var currentFamily: AGYModelFamily? { families.first { $0.variants.contains { $0.id == model } } }
     var baseModel: String { currentFamily?.id ?? selected?.baseModel ?? model }
     var effort: String { currentFamily?.variants.first { $0.id == model }?.effort ?? selected?.effort ?? "" }
@@ -76,7 +83,7 @@ struct AGYDraftAttachment: Identifiable {
     var liveScope: String { AGYLiveActivity.scope(configurationScope) }
     func updateLiveActivity() {
         guard connected, let selected else { liveActivity.pause(); return }
-        liveActivity.update(selected, scope: liveScope, foreground: foreground)
+        liveActivity.update(selected, scope: liveScope, foreground: foreground, backgroundSync: backgroundID != .invalid)
     }
     func openActivity(_ url: URL) async {
         if !connected { await restore() }
@@ -91,6 +98,7 @@ struct AGYDraftAttachment: Identifiable {
     }
     func connect(_ credentials: AGYCredentials) async {
         epoch = UUID(); let token = epoch
+        heartbeatTask?.cancel(); endBackgroundTime()
         streamTask?.cancel(); api?.invalidate()
         let client = AGYAPI(credentials: credentials)
         api = client; busy = true; connection = "正在连接"; error = nil; connected = false
@@ -102,6 +110,8 @@ struct AGYDraftAttachment: Identifiable {
             guard status.version == 1, !available.models.isEmpty else { throw AGYError.message("服务器协议不兼容或没有可用模型") }
             roots = status.roots; cwd = roots.first ?? ""; models = available.models
             families = available.families ?? []
+            queueReady = status.capabilities?.queue == true
+            steeringReady = status.capabilities?.steering == true
             fileBrowserReady = status.capabilities?.fileBrowser == true && status.capabilities?.directoryMentions == true
             gatewayReady = status.capabilities?.nativeApprovals == true && status.capabilities?.separateEffort == true
             let profile = credentials.url.absoluteString + "#" + (status.accountProfile ?? "legacy")
@@ -147,7 +157,7 @@ struct AGYDraftAttachment: Identifiable {
         let switching = selected?.id != id
         if switching { saveDraft(); attachmentContext = UUID(); attachments = []; references = []; importing = false }
         selectionEpoch = UUID(); let token = selectionEpoch, account = epoch
-        streamTask?.cancel()
+        streamTask?.cancel(); heartbeatTask?.cancel()
         guard let api else { return }
         busy = true; error = nil
         if switching, let cached = cache.read("session-" + id, as: AGYSession.self) { selected = cached; connection = "显示本机缓存" }
@@ -168,7 +178,7 @@ struct AGYDraftAttachment: Identifiable {
     }
     func newConversation() {
         guard pending == nil else { error = "请先核对上一条发送结果。"; return }
-        saveDraft(); selectionEpoch = UUID(); streamTask?.cancel(); selected = nil; error = nil; connection = "已就绪"
+        saveDraft(); selectionEpoch = UUID(); streamTask?.cancel(); heartbeatTask?.cancel(); endBackgroundTime(); selected = nil; error = nil; connection = "已就绪"
         draft = cache.read(draftKey, as: String.self) ?? ""
         restoreConfiguration()
         attachmentContext = UUID(); attachments = []; references = cache.read("references-" + draftKey, as: [AGYFileEntry].self) ?? []; importing = false
@@ -188,7 +198,7 @@ struct AGYDraftAttachment: Identifiable {
         cwd = path; references = []; saveDraft(); rememberConfiguration()
     }
     private func reconcilePending(_ s: AGYSession) {
-        if let p = pending, p.sessionID == s.id, s.messages?.contains(where: { $0.id == p.requestID }) == true {
+        if let p = pending, p.sessionID == s.id, (s.messages?.contains(where: { $0.id == p.requestID }) == true || s.inbox?.contains(where: { $0.id == p.requestID }) == true) {
             if draft == p.text { draft = ""; saveDraft() }
             references.removeAll { p.references?.contains($0.path) == true }; saveDraft()
             pending = nil; SecureStore.delete("pending-send")
@@ -217,8 +227,11 @@ struct AGYDraftAttachment: Identifiable {
         await reload()
         return session.id
     }
-    func send() async {
+    func send(delivery: String? = nil) async {
         guard canSend, let api else { return }
+        let selectedDelivery = delivery ?? (selected?.running == true ? "queue" : "normal")
+        guard selectedDelivery != "steer" || steeringReady else { error = "请先更新支持引导的网关"; return }
+        guard selectedDelivery == "normal" || queueReady else { error = "请先更新支持排队的网关"; return }
         let textToSend = draft
         busy = true; error = nil
         let account = epoch, selection = selectionEpoch
@@ -240,14 +253,14 @@ struct AGYDraftAttachment: Identifiable {
                 }
             }
             uploadProgress = ""
-            let p = PendingSend(sessionID: id, requestID: UUID().uuidString.lowercased(), text: textToSend, attachments: attachments.compactMap { $0.uploaded?.id }, references: references.map(\.path))
+            let p = PendingSend(sessionID: id, requestID: UUID().uuidString.lowercased(), text: textToSend, attachments: attachments.compactMap { $0.uploaded?.id }, references: references.map(\.path), delivery: selectedDelivery)
             guard SecureStore.write(try JSONEncoder().encode(p), account: "pending-send") else { throw AGYError.message("无法保存发送编号，消息尚未发送。") }
             pending = p
             try await submit(p, api: api, account: account)
         } catch { if epoch == account { uploadProgress = ""; self.error = pending == nil ? error.localizedDescription : "发送结果待确认。请核对会话，或使用相同编号重试。\n" + error.localizedDescription } }
     }
     private func submit(_ p: PendingSend, api: AGYAPI, account: UUID) async throws {
-        let s: AGYSession = try await api.json("sessions/\(p.sessionID)/messages", method: "POST", body: .object(["text": .string(p.text), "requestID": .string(p.requestID), "attachments": .array((p.attachments ?? []).map { .string($0) }), "references": .array((p.references ?? []).map { .string($0) })]))
+        let s: AGYSession = try await api.json("sessions/\(p.sessionID)/messages", method: "POST", body: .object(["text": .string(p.text), "requestID": .string(p.requestID), "attachments": .array((p.attachments ?? []).map { .string($0) }), "references": .array((p.references ?? []).map { .string($0) }), "delivery": .string(p.delivery ?? "normal")]))
         guard epoch == account else { return }
         reconcilePending(s)
         if selected?.id == s.id { selected = s; watch(s.id) }
@@ -259,6 +272,17 @@ struct AGYDraftAttachment: Identifiable {
         defer { if epoch == account { busy = false } }
         do { try await submit(p, api: api, account: account); error = nil }
         catch { if epoch == account { self.error = error.localizedDescription } }
+    }
+    func changeInbox(_ item: AGYInboxItem, resume: Bool) async {
+        guard let api, selected?.id == item.sessionID, !busy else { return }
+        busy = true
+        let account = epoch, sid = item.sessionID
+        defer { if epoch == account { busy = false } }
+        do {
+            let updated: AGYSession = try await api.json("sessions/\(sid)/inbox/\(item.id)", method: resume ? "PATCH" : "DELETE", body: resume ? .object(["action": .string("resume")]) : nil)
+            guard epoch == account, selected?.id == sid else { return }
+            selected = updated; watch(sid)
+        } catch { if epoch == account { self.error = error.localizedDescription } }
     }
     func stop() async {
         guard let id = selected?.id, let api else { return }
@@ -345,7 +369,8 @@ struct AGYDraftAttachment: Identifiable {
     }
     func watch(_ id: String) {
         streamTask?.cancel()
-        guard let api, foreground else { return }
+        guard let api, foreground || backgroundID != .invalid else { return }
+        startHeartbeat(id)
         let token = selectionEpoch, account = epoch
         streamTask = Task { [weak self] in
             var failures = 0
@@ -371,20 +396,88 @@ struct AGYDraftAttachment: Identifiable {
             }
         }
     }
+    private func startHeartbeat(_ id: String) {
+        heartbeatTask?.cancel()
+        guard selected?.running == true, let api else { return }
+        let account = epoch, selection = selectionEpoch
+        heartbeatTask = Task { [weak self] in
+            while !Task.isCancelled {
+                guard let self, self.epoch == account, self.selectionEpoch == selection, self.selected?.id == id,
+                      AGYActivityRefreshPolicy.shouldSynchronize(foreground: self.foreground, hasBackgroundTime: self.backgroundID != .invalid, running: self.selected?.running == true) else { return }
+                do {
+                    let snapshot = try await api.sessionSnapshot(id)
+                    guard !Task.isCancelled, self.epoch == account, self.selectionEpoch == selection, self.selected?.id == id else { return }
+                    if snapshot.revision >= (self.selected?.revision ?? 0) {
+                        self.selected = snapshot; self.reconcilePending(snapshot)
+                        self.cache.write(snapshot, key: "session-" + id)
+                    }
+                    if !snapshot.running {
+                        if !self.foreground {
+                            try? await Task.sleep(for: .seconds(1))
+                            self.endBackgroundTime()
+                        }
+                        return
+                    }
+                } catch {
+                    if Task.isCancelled { return }
+                    // Do not mark unverified cached state as freshly updated.
+                    self.connection = "连接中断 · 正在重连"
+                }
+                let interval = self.foreground ? AGYActivityRefreshPolicy.foregroundInterval : AGYActivityRefreshPolicy.backgroundInterval
+                do { try await Task.sleep(for: .seconds(interval)) } catch { return }
+            }
+        }
+    }
+    private func beginBackgroundTime() {
+        guard backgroundID == .invalid, selected?.running == true, liveActivity.enabled else { return }
+        backgroundID = UIApplication.shared.beginBackgroundTask(withName: "AGY task status") { [weak self] in
+            MainActor.assumeIsolated { self?.suspendBackgroundSync() }
+        }
+    }
+    private func endBackgroundTime() {
+        backgroundDeadline?.cancel(); backgroundDeadline = nil
+        if backgroundID != .invalid {
+            let identifier = backgroundID; backgroundID = .invalid
+            UIApplication.shared.endBackgroundTask(identifier)
+        }
+    }
+    private func suspendBackgroundSync() {
+        guard !foreground else { endBackgroundTime(); return }
+        heartbeatTask?.cancel(); streamTask?.cancel(); liveActivity.pause()
+        connection = "后台保留最近状态"
+        endBackgroundTime()
+    }
     func scene(_ phase: ScenePhase) {
-        if phase == .background { foreground = false; liveActivity.pause(); streamTask?.cancel(); connection = "后台已暂停同步" }
-        if phase == .active { foreground = true; if let id = selected?.id { Task { await select(id) } } else if connected { Task { await reload() } } }
+        if phase == .inactive { beginBackgroundTime() }
+        if phase == .background {
+            foreground = false
+            if selected?.running == true, liveActivity.enabled {
+                beginBackgroundTime()
+                if backgroundID != .invalid, let id = selected?.id {
+                    startHeartbeat(id)
+                    backgroundDeadline = Task { [weak self] in
+                        do { try await Task.sleep(for: .seconds(AGYActivityRefreshPolicy.backgroundBudget)) } catch { return }
+                        self?.suspendBackgroundSync()
+                    }
+                } else { suspendBackgroundSync() }
+            } else { suspendBackgroundSync() }
+        }
+        if phase == .active {
+            foreground = true; endBackgroundTime()
+            if let id = selected?.id { Task { await select(id) } }
+            else if connected { Task { await reload() } }
+        }
     }
     func saveDraft() {
         cache.write(draft, key: draftKey)
         cache.write(references, key: "references-" + draftKey)
     }
     func disconnect() {
-        liveActivity.clear()
+        liveActivity.clear(); heartbeatTask?.cancel(); endBackgroundTime()
         epoch = UUID(); selectionEpoch = UUID(); streamTask?.cancel(); api?.invalidate(); api = nil
         SecureStore.delete("connection"); SecureStore.delete("pending-send"); pending = nil
         connected = false; busy = false; sessions = []; selected = nil; draft = ""; saveDraft(); error = nil; connection = "尚未连接"
         attachmentContext = UUID(); attachments = []; references = []; importing = false; uploadProgress = ""; limits = nil; limitsLoading = false; modelsLoading = false
-        cache.clear(); configurationScope = ""; defaultModel = ""; fileBrowserReady = false; gatewayReady = false; families = []; accountProfile = ""; UserDefaults.standard.removeObject(forKey: "activeAccountProfile")
+        cache.clear(); queueReady = false; steeringReady = false; configurationScope = ""; defaultModel = ""; fileBrowserReady = false; gatewayReady = false; families = []; accountProfile = ""; UserDefaults.standard.removeObject(forKey: "activeAccountProfile")
     }
 }

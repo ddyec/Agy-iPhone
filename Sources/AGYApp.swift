@@ -170,6 +170,28 @@ struct AGYChat: View {
     }
     private var composer: some View {
         VStack(alignment: .leading, spacing: 10) {
+            if let items = store.selected?.inbox?.filter({ $0.pending || $0.status == "delivered" }), !items.isEmpty {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 8) {
+                        ForEach(items) { item in
+                            HStack(alignment: .top, spacing: 8) {
+                                VStack(alignment: .leading, spacing: 3) {
+                                    Text(item.label).font(.caption2).foregroundStyle(.secondary)
+                                    Text(item.text.isEmpty ? "文件与工作区引用" : item.text).font(.caption).lineLimit(2)
+                                    if !item.error.isEmpty { Text(item.error).font(.caption2).foregroundStyle(.orange) }
+                                }
+                                Spacer()
+                                if item.status == "held" {
+                                    Button("继续") { Task { await store.changeInbox(item, resume: true) } }.font(.caption)
+                                }
+                                if ["pending", "held"].contains(item.status) {
+                                    Button { Task { await store.changeInbox(item, resume: false) } } label: { Image(systemName: "xmark.circle") }.accessibilityLabel("取消这条消息")
+                                }
+                            }.padding(8).background(NativeTheme.surface, in: RoundedRectangle(cornerRadius: 10))
+                        }
+                    }
+                }.frame(maxHeight: 136).disabled(store.busy)
+            }
             if !store.references.isEmpty {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack {
@@ -226,7 +248,19 @@ struct AGYChat: View {
                     .disabled(store.busy || store.importing || store.pending != nil || store.attachments.count >= 8).accessibilityLabel("添加照片或文件")
                 TextField("发送消息…", text: $store.draft, axis: .vertical).lineLimit(1...6).focused($composerFocused).padding(.vertical, 9)
                 if store.selected?.running == true {
-                    Button { Task { await store.stop() } } label: { Image(systemName: "stop.fill").frame(width: 44, height: 44).background(NativeTheme.accent, in: Circle()).foregroundStyle(NativeTheme.onAccent) }.accessibilityLabel("停止任务")
+                    Button { Task { await store.stop() } } label: { Image(systemName: "stop.fill").frame(width: 34, height: 44) }.accessibilityLabel("停止任务并暂停排队消息")
+                    Menu {
+                        Button("立即引导 · 下一次思考生效", systemImage: "arrow.turn.up.right") {
+                            composerFocused = false; Task { await store.send(delivery: "steer") }
+                        }.disabled(!store.steeringReady)
+                        Button("排队跟进 · 本轮结束后发送", systemImage: "text.badge.plus") {
+                            composerFocused = false; Task { await store.send(delivery: "queue") }
+                        }
+                    } label: {
+                        Group { if store.busy { ProgressView() } else { Image(systemName: "arrow.up").fontWeight(.semibold) } }
+                            .frame(width: 44, height: 44).background(store.canSend ? NativeTheme.accent : NativeTheme.inactiveControl, in: Circle())
+                            .foregroundStyle(store.canSend ? NativeTheme.onAccent : NativeTheme.inactiveSymbol)
+                    }.disabled(!store.canSend).accessibilityLabel("引导或排队发送")
                 } else {
                     Button { composerFocused = false; jumpToLatest += 1; Task { await store.send() } } label: {
                         Group { if store.busy { ProgressView() } else { Image(systemName: "arrow.up").fontWeight(.semibold) } }.frame(width: 44, height: 44)
@@ -401,7 +435,7 @@ struct AGYLiveActivitySettings: View {
             Toggle("任务实时活动", isOn: $activity.enabled)
             Toggle("显示任务标题和进展", isOn: $activity.previews).disabled(!activity.enabled)
             if !activity.available { Text("请在 iPhone 设置中允许 AGY 的实时活动。").font(.footnote).foregroundStyle(.secondary) }
-            Text("跟随当前任务显示进展和审批状态。切到后台会标为待同步，点按返回会话更新；当前版本不支持后台推送。默认隐藏任务内容。").font(.footnote).foregroundStyle(.secondary)
+            Text("进展到达即更新，运行时每 8 秒核对状态；切到后台后在系统允许的短时间内继续刷新。系统挂起后显示最近状态和更新时间，点按恢复同步。默认隐藏任务内容。").font(.footnote).foregroundStyle(.secondary)
             if let issue = activity.issue { Text(issue).font(.footnote).foregroundStyle(.orange) }
         }
         .onChange(of: activity.enabled) { _, _ in store.updateLiveActivity() }

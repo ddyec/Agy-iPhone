@@ -39,6 +39,29 @@ struct AGYApproval: Codable, Identifiable {
     let createdAt: Double
     let expiresAt: Double
 }
+struct AGYGuidance: Codable { let id: String; let index: Int; let text: String }
+struct AGYInboxItem: Codable, Identifiable {
+    let id: String
+    let sessionID: String
+    let delivery: String
+    let status: String
+    let text: String
+    let createdAt: Double
+    let error: String
+    let attachmentCount: Int
+    var pending: Bool { ["pending", "held", "unknown", "dispatching", "running"].contains(status) }
+    var label: String {
+        switch status {
+        case "pending": return delivery == "steer" ? "等待下一次思考时递交" : "已排队 · 本轮结束后执行"
+        case "delivered": return "引导已递交"
+        case "running": return "正在执行这条跟进"
+        case "held": return "已暂停 · 等待你继续"
+        case "unknown": return "递交结果待确认 · 请核对会话"
+        case "done": return "该轮已结束"
+        default: return "正在递交"
+        }
+    }
+}
 struct AGYResponseStep: Codable { let index: Int; let text: String; var thinking: String? }
 struct AGYLimits: Decodable {
     let fetchedAt: Double
@@ -76,6 +99,7 @@ struct AGYMessage: Codable, Identifiable {
     var attachments: [AGYAttachment]?
     var steps: [AGYResponseStep]?
     var finalText: String?
+    var guidance: [AGYGuidance]?
     var rendered: ChatMessage {
         var blocks: [WireValue] = [.object(["type": .string("text"), "text": .string(text)])]
         for a in attachments ?? [] {
@@ -100,6 +124,10 @@ struct AGYMessage: Codable, Identifiable {
             step.text.trimmingCharacters(in: .whitespacesAndNewlines) == answer.trimmingCharacters(in: .whitespacesAndNewlines) && step.index > lastTool ? step.index : nil
         }
         var middle: [(Int, ChatMessage)] = []
+        for item in guidance ?? [] {
+            middle.append((item.index, ChatMessage(id: item.id, value: .object([
+                "role": .string("user"), "presentationKind": .string("guidance"), "content": .string(item.text)]))))
+        }
         for tool in tools ?? [] {
             middle.append((Int(tool.id) ?? 0, ChatMessage(id: id + "-tool-" + tool.id, value: .object([
                 "role": .string("toolResult"), "toolName": .string(tool.name), "toolState": .string(tool.state), "details": tool.parameters,
@@ -144,6 +172,7 @@ struct AGYSession: Codable, Identifiable {
     var effort: String?
     var approvalMode: String?
     var approvals: [AGYApproval]?
+    var inbox: [AGYInboxItem]?
 }
 struct AGYStatus: Decodable {
     let name: String
@@ -153,7 +182,7 @@ struct AGYStatus: Decodable {
     var accountProfile: String?
     var capabilities: AGYCapabilities?
 }
-struct AGYCapabilities: Decodable { let separateEffort: Bool; let nativeApprovals: Bool; let artifacts: Bool; var fileBrowser: Bool?; var directoryMentions: Bool? }
+struct AGYCapabilities: Decodable { let separateEffort: Bool; let nativeApprovals: Bool; let artifacts: Bool; var fileBrowser: Bool?; var directoryMentions: Bool?; var queue: Bool?; var steering: Bool? }
 struct AGYModels: Decodable { let models: [AGYModel]; var families: [AGYModelFamily]? }
 struct AGYSessions: Decodable { let sessions: [AGYSession] }
 struct AGYCredentials: Codable {
