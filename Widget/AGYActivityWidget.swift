@@ -11,9 +11,7 @@ struct AGYTaskWidget: Widget {
             AGYActivityCard(context: context).padding(.horizontal, 12).padding(.vertical, 10)
                 .activityBackgroundTint(Color(.secondarySystemBackground))
                 .activitySystemActionForegroundColor(.primary)
-                .contentMargins(.top, 4, for: .expanded)
-            .contentMargins(.bottom, 6, for: .expanded)
-            .widgetURL(AGYActivityPolicy.link(session: context.attributes.sessionID, scope: context.attributes.scope))
+                .widgetURL(AGYActivityPolicy.link(session: context.attributes.sessionID, scope: context.attributes.scope))
         } dynamicIsland: { context in
             DynamicIsland {
                 // Use the space BESIDE the camera instead of reserving an
@@ -43,6 +41,8 @@ struct AGYTaskWidget: Widget {
             } minimal: {
                 Image("AntigravityMark").resizable().scaledToFit().frame(width: 16, height: 16)
             }
+            .contentMargins(.top, 4, for: .expanded)
+            .contentMargins(.bottom, 6, for: .expanded)
             .widgetURL(AGYActivityPolicy.link(session: context.attributes.sessionID, scope: context.attributes.scope))
         }
     }
