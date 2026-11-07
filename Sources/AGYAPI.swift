@@ -37,7 +37,7 @@ final class AGYExternalRedirectPolicy: NSObject, URLSessionTaskDelegate {
         // Match the mobile client identity used by the existing Pi app so the
         // origin's Browser Integrity Check accepts native API requests.
         let os = UIDevice.current.systemVersion.replacingOccurrences(of: ".", with: "_")
-        let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.4.1"
+        let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.4.2"
         request.setValue("Mozilla/5.0 (iPhone; CPU iPhone OS \(os) like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148 AGY-iPhone/\(version)", forHTTPHeaderField: "User-Agent")
         if let body { request.httpBody = try JSONEncoder().encode(body); request.setValue("application/json", forHTTPHeaderField: "Content-Type") }
         return request

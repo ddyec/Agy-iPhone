@@ -1,3 +1,9 @@
+## AGY 1.4.2 compact Live Activity layout
+
+UI-only change. The expanded Dynamic Island now puts a fixed-20pt-high logo/status row in the leading region and timer in the trailing region alongside the camera, instead of putting an entire card solely in the bottom region. The bottom region contains only a single-line title. Explicit top/bottom content margins are 4/6pt; no negative offsets or camera overlap. Compact logo/timer widths are reduced, and lock-screen padding, logo size, row spacing and line counts are reduced. Expanded outer geometry remains system-controlled.
+
+Version 1.4.2 / build 9; no backend or task lifecycle changes. Existing native/IPA validation runs in Actions. Actual iPhone layout requires checking the newly installed build; archive success alone is not a screenshot comparison.
+
 ## Provider thinking compatibility
 
 The deployed gateway already emits optional `steps[].thinking` (including transcript-backed textless steps). The client now decodes and preserves this text in index order before each corresponding response/tool group. Long text uses a deterministic first-paragraph/320-character excerpt with an explicit expansion control; this is source text, not a generated explanation of hidden reasoning. New regressions cover textless thinking steps and source-only excerpts. The source gateway also preserves incoming thinking deltas. Existing production transcript/title behavior is retained when applying final-response metadata.

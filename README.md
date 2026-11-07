@@ -1,6 +1,8 @@
-# AGY iPhone 1.4.1 · 思考与执行时间线
+# AGY iPhone 1.4.2 · 紧凑实时活动
 
-本版同时修复本地保存流程：下载文件持久保存在“文件 App → 我的 iPhone → AGY → 下载”；“存储到文件”选定文件夹后由 App 协调写入并校验，成功/失败明确提示，同名文件另存、不覆盖原件。“文件”页新增“本机已下载”入口。
+本版收紧实时活动：展开态的标识、状态与计时移到摄像头两侧，下方只留一行任务标题；缩小上下边距和紧凑态宽度，锁屏卡片也缩小图标及行距。系统控制的摄像头区域与展开外轮廓不做负边距覆盖。
+
+前版同时修复本地保存流程：下载文件持久保存在“文件 App → 我的 iPhone → AGY → 下载”；“存储到文件”选定文件夹后由 App 协调写入并校验，成功/失败明确提示，同名文件另存、不覆盖原件。“文件”页新增“本机已下载”入口。
 
 本版修复灵动岛错位：标识、状态、计时与标题放入同一布局，并移除星星图标。对话默认显示按事件顺序排列的“思考摘要 → 折叠工具组 → 下一段摘要”；执行结束时自动折叠整段过程，最终答复单独展开。摘要只展示 AGY 实际输出的公开进度文字，不生成或推断隐藏推理。
 
@@ -18,7 +20,7 @@
 
 # AGY for iPhone
 
-独立的 SwiftUI 原生 Antigravity CLI 客户端，沿用 [Pi iPhone](https://github.com/ddyec/Pi-iPhone) 的消息展示与界面基础。iOS 17+、仅 iPhone，SVG 原生预览使用固定 SwiftDraw 0.29.0。Bundle ID：`com.ddyec.agy-iphone`，可与 Pi 同时安装。当前源码版本 1.4.1 / build 8。
+独立的 SwiftUI 原生 Antigravity CLI 客户端，沿用 [Pi iPhone](https://github.com/ddyec/Pi-iPhone) 的消息展示与界面基础。iOS 17+、仅 iPhone，SVG 原生预览使用固定 SwiftDraw 0.29.0。Bundle ID：`com.ddyec.agy-iphone`，可与 Pi 同时安装。当前源码版本 1.4.2 / build 9。
 
 App 图标、登录页、欢迎页和消息标识使用 [Google 官方 Antigravity Press Assets](https://antigravity.google/press) 全彩原图；来源与打包说明见 `Brand/README.md`。
 
