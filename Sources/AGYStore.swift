@@ -230,7 +230,7 @@ struct AGYDraftAttachment: Identifiable {
     func send(delivery: String? = nil) async {
         guard canSend, let api else { return }
         let selectedDelivery = delivery ?? (selected?.running == true ? "queue" : "normal")
-        guard selectedDelivery != "steer" || steeringReady else { error = "请先更新支持引导的网关"; return }
+        guard selectedDelivery != "steer" || (steeringReady && approvalMode != "legacy") else { error = "请先更新支持引导的网关"; return }
         guard selectedDelivery == "normal" || queueReady else { error = "请先更新支持排队的网关"; return }
         let textToSend = draft
         busy = true; error = nil

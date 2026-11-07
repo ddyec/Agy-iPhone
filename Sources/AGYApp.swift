@@ -252,7 +252,7 @@ struct AGYChat: View {
                     Menu {
                         Button("立即引导 · 下一次思考生效", systemImage: "arrow.turn.up.right") {
                             composerFocused = false; Task { await store.send(delivery: "steer") }
-                        }.disabled(!store.steeringReady)
+                        }.disabled(!store.steeringReady || store.approvalMode == "legacy")
                         Button("排队跟进 · 本轮结束后发送", systemImage: "text.badge.plus") {
                             composerFocused = false; Task { await store.send(delivery: "queue") }
                         }

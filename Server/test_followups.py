@@ -34,6 +34,8 @@ class FollowupTests(unittest.TestCase):
         return {'text':text,'delivery':delivery,'requestID':str(uuid.uuid4())}
 
     def running(self):
+        if self.g.review is not None:
+            session=self.g.get(self.s['id']); session['approvalMode']='turbo'; self.g.save(session)
         self.g.submit(self.s['id'],{'text':'first','requestID':str(uuid.uuid4())})
 
     def finish(self, success=True):
@@ -83,6 +85,13 @@ class FollowupTests(unittest.TestCase):
         self.assertEqual(after['inbox'][0]['status'],'delivered')
         with self.assertRaises(Failure): self.g.followups.change(self.s['id'],body['requestID'],'cancel')
         self.g.review=None
+
+    def test_legacy_turn_cannot_claim_native_guidance_support(self):
+        self.running(); self.g.review=object()
+        try:
+            with self.assertRaises(Failure): self.g.submit(self.s['id'],self.body('guide','steer'))
+            self.assertEqual(self.g.get(self.s['id'])['inbox'],[])
+        finally: self.g.review=None
 
     def test_restart_holds_pending_and_never_replays(self):
         self.running(); body=self.body('later'); self.g.submit(self.s['id'],body)

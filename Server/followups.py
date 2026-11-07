@@ -79,7 +79,8 @@ class Followups:
                 if old[0]!=sid or item['digest']!=digest: raise Failure(409, '请求编号已用于另一条消息')
                 return g.get(sid)
             if g.db.execute('SELECT 1 FROM requests WHERE id=?',(rid,)).fetchone(): raise Failure(409, '请求编号已使用')
-            if mode=='steer' and g.review is None: raise Failure(503, '请先部署支持引导的独立账号网关')
+            if mode=='steer' and (g.review is None or g.get(sid).get('approvalMode')=='legacy'):
+                raise Failure(503, '引导需要本轮使用 Restriction 或 Turbo 策略；旧版策略可使用排队')
             if sum(v['status'] in ('pending','held','unknown','dispatching','running') for v in self.items(sid))>=20:
                 raise Failure(409, '待处理消息已达 20 条，请先处理或取消')
             prompt = self.prepare(sid,body)
