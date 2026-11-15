@@ -110,15 +110,14 @@ extension EnvironmentValues {
     private func load() async {
         if let svgMarkup {
             let bytes = Data(svgMarkup.utf8)
-            if let svg = NativeSVGDocument.parse(bytes), let raster = svg.rasterize(scale: 2) {
-                image = raster
-                resolvedSVG = svgMarkup
-                failed = false
+            resolvedSVG = svgMarkup
+            if let svg = NativeSVGDocument.parse(bytes) {
+                let raster = svg.rasterize(scale: 2)
+                image = (raster.size.width > 0 && raster.size.height > 0) ? raster : nil
             } else {
                 image = nil
-                resolvedSVG = svgMarkup
-                failed = false
             }
+            failed = false
             return
         }
 
@@ -141,8 +140,9 @@ extension EnvironmentValues {
 
             if let rawText = String(data: bytes, encoding: .utf8), let extractedSVG = NativeMediaReferences.svg(rawText) {
                 resolvedSVG = extractedSVG
-                if let svg = NativeSVGDocument.parse(Data(extractedSVG.utf8)), let raster = svg.rasterize(scale: 2) {
-                    image = raster
+                if let svg = NativeSVGDocument.parse(Data(extractedSVG.utf8)) {
+                    let raster = svg.rasterize(scale: 2)
+                    image = (raster.size.width > 0 && raster.size.height > 0) ? raster : nil
                 } else {
                     image = nil
                 }
