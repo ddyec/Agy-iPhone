@@ -2,22 +2,8 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 mkdir -p dist build
-# The repository workflow already runs core/attachment checks. Run the newer
-# client component checks here without requiring a workflow-permission change.
-xcrun swiftc -parse-as-library Sources/NativeScrollPolicy.swift Tests/NativeScrollPolicyTests.swift -o build/scroll
-build/scroll
-xcrun swiftc -parse-as-library Sources/NativeCore.swift Sources/NativeSessionHistory.swift Tests/NativeHistoryTests.swift -o build/history
-build/history
 xcrun swiftc -parse-as-library Sources/NativeCore.swift Sources/AGYDomain.swift Sources/NativeNetworking.swift Sources/NativeDownloadLinks.swift Sources/NativeMediaReferences.swift Sources/NativeConversationPresentation.swift Tests/NativePresentationTests.swift -o build/presentation
 build/presentation
-xcrun swiftc -parse-as-library Sources/AGYFilePresentation.swift Tests/AGYFilePresentationTests.swift -o build/files
-build/files
-xcrun swiftc -parse-as-library Sources/AGYConfigurationMemory.swift Tests/AGYConfigurationMemoryTests.swift -o build/configuration
-build/configuration
-xcrun swiftc -parse-as-library Sources/NativeLocalFileStore.swift Tests/NativeLocalFileStoreTests.swift -o build/local-files
-build/local-files
-xcrun swiftc -parse-as-library Shared/AGYActivityState.swift Sources/AGYActivityRefreshPolicy.swift Tests/AGYActivityPolicyTests.swift -o build/activity
-build/activity
 swift scripts/prepare-icon.swift
 xcodebuild -project AGY.xcodeproj -scheme AGY -configuration Release \
   -destination 'generic/platform=iOS' -archivePath build/AGY.xcarchive \

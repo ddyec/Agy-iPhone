@@ -24,7 +24,7 @@ import Foundation
         check(NativeConversationPresentation.turns([user, plan, call, result], live: nil, running: false)[0].conclusion == nil, "Do not promote an earlier progress message after tool execution")
         let second = NativeConversationPresentation.turns(complete + [message("u2", "user", "next")], live: live, running: true)
         check(second.count == 2 && second[0].conclusion?.id == "f" && second[1].running, "Previous conclusions remain visible during next run")
-        check(NativeConversationPresentation.step(call) == "执行命令", "Step label omits raw command")
+        check(NativeConversationPresentation.step(call) == "命令 · very long command", "Step label annotates target command")
         check(NativeConversationPresentation.step(plan) == "检查服务状态", "Step excerpt uses source text, no invented summary")
         check(NativeConversationPresentation.turns([], live: nil, running: false).isEmpty, "Empty transcript")
         func path(_ raw: String) -> String? { NativeFileRules.downloadPath(NativeDownloadLinks.url(raw)!, host: "agy.yectech.uk", cwd: "/workspace") }
@@ -66,13 +66,25 @@ import Foundation
         check(noResult.presented.map(\.id) == ["incomplete-step-0", "incomplete-tool-1"], "Explicit empty final does not reuse progress as the answer")
         let repeated = AGYMessage(id: "repeat", role: "assistant", text: "相同文字", tools: [AGYTool(id: "1", name: "read", state: "DONE", parameters: .object([:]), output: "output")], steps: [AGYResponseStep(index: 0, text: "相同文字")], finalText: "相同文字")
         check(repeated.presented.count == 3, "Preserve identical earlier summary when a tool separates it from the final")
-        let thinking = AGYMessage(id: "thought", role: "assistant", text: "done", tools: [AGYTool(id: "1", name: "read", state: "DONE", parameters: .object([:]), output: "output")], steps: [AGYResponseStep(index: 0, text: "", thinking: "先核对依赖"), AGYResponseStep(index: 2, text: "done", thinking: "检查完毕")], finalText: "done")
+        let thinking = AGYMessage(id: "thought", role: "assistant", text: "done", tools: [AGYTool(id: "1", name: "read_file", state: "DONE", parameters: .object(["Path": .string("/workspace/Sources/AGYApp.swift"), "StartLine": .number(1), "EndLine": .number(40)]), output: "output")], steps: [AGYResponseStep(index: 0, text: "", thinking: "先核对依赖"), AGYResponseStep(index: 2, text: "done", thinking: "检查完毕")], finalText: "done")
         check(thinking.presented.map(\.id) == ["thought-thinking-0", "thought-tool-1", "thought-thinking-2", "thought"], "Preserve provider-supplied thinking between tools, including textless steps")
+        let thinkingTurn = NativeConversationPresentation.turns([user] + thinking.presented, live: nil, running: false)[0]
+        check(NativeConversationPresentation.sections(thinkingTurn.process).map(\.kind) == [.thinking, .tools, .thinking], "Thinking is separated from execution sections")
+        let readBrief = NativeConversationPresentation.toolBrief(thinking.presented[1])
+        check(readBrief.action == "读取" && readBrief.detail == "Sources/AGYApp.swift #L1-40", "Tool brief extracts concise file path and line range")
+        let cmdBrief = NativeConversationPresentation.toolBrief(name: "run_command", parameters: .object(["CommandLine": .string("cd /workspace && git status -s"), "toolSummary": .string("Check git status")]))
+        check(cmdBrief.action == "命令" && cmdBrief.detail.contains("Check git status") && cmdBrief.detail.contains("git status -s"), "Command brief summarizes task and command")
         check(NativeConversationPresentation.summaryExcerpt("第一段\n\n第二段") == "第一段…", "Summary excerpts use source text only")
         let guided = AGYMessage(id: "guided", role: "assistant", text: "完成", tools: [AGYTool(id: "1", name: "read", state: "DONE", parameters: .object([:]), output: "output")], steps: [AGYResponseStep(index: 0, text: "先检查")], finalText: "完成", guidance: [AGYGuidance(id: "guidance-1", index: 1, text: "注意兼容旧版本")])
         let guidedTurns = NativeConversationPresentation.turns([user]+guided.presented, live: nil, running: false)
         check(guidedTurns.count == 1 && guidedTurns[0].conclusion?.text == "完成", "Mid-turn guidance stays inside the same process and does not split the answer")
         check(NativeConversationPresentation.sections(guidedTurns[0].process).map(\.kind) == [.summary, .guidance, .tools], "Guidance is distinguishable from provider summaries")
+        func inbox(_ status: String, _ delivery: String = "queue") -> AGYInboxItem {
+            AGYInboxItem(id: "i-" + status, sessionID: "s", delivery: delivery, status: status, text: "follow up", createdAt: 1, error: "", attachmentCount: 0)
+        }
+        check(inbox("pending", "steer").visibleInComposer && inbox("pending", "queue").visibleInComposer, "Waiting items remain visible in composer")
+        check(inbox("held").visibleInComposer && inbox("unknown").visibleInComposer, "Held/uncertain items remain visible for user action")
+        check(!inbox("delivered", "steer").visibleInComposer && !inbox("dispatching").visibleInComposer && !inbox("running").visibleInComposer && !inbox("done").visibleInComposer, "Dispatched/delivered items are hidden from bottom composer")
         print("Passed \(checks) conversation presentation and download link checks")
     }
 }

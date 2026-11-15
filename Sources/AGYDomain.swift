@@ -50,9 +50,12 @@ struct AGYInboxItem: Codable, Identifiable {
     let error: String
     let attachmentCount: Int
     var pending: Bool { ["pending", "held", "unknown", "dispatching", "running"].contains(status) }
+    var visibleInComposer: Bool {
+        ["pending", "held", "unknown"].contains(status)
+    }
     var label: String {
         switch status {
-        case "pending": return delivery == "steer" ? "等待下一次思考时递交" : "已排队 · 本轮结束后执行"
+        case "pending": return delivery == "steer" ? "等待下一次思考生效" : "已排队 · 本轮结束后发送"
         case "delivered": return "引导已递交"
         case "running": return "正在执行这条跟进"
         case "held": return "已暂停 · 等待你继续"
@@ -136,7 +139,7 @@ struct AGYMessage: Codable, Identifiable {
         for step in orderedSteps {
             if let thinking = step.thinking, !thinking.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 middle.append((step.index, ChatMessage(id: id + "-thinking-\(step.index)", value: .object([
-                    "role": .string("assistant"), "presentationKind": .string("summary"), "content": .string(thinking)]))))
+                    "role": .string("assistant"), "presentationKind": .string("thinking"), "content": .string(thinking)]))))
             }
             guard !step.text.isEmpty, step.index != repeatedFinalIndex else { continue }
             middle.append((step.index, ChatMessage(id: id + "-step-\(step.index)", value: .object([

@@ -1,18 +1,21 @@
 import SwiftUI
 import UIKit
 
-/// Explicit surface levels keep chat cards distinct in both appearances.
+/// System-harmonized semantic surfaces and tokens for native iOS presentation.
 enum NativeTheme {
-    static let canvas = adaptive(light: 0xF2F2F7, dark: 0x11151E)
-    static let surface = adaptive(light: 0xFFFFFF, dark: 0x1D2432)
-    static let composer = adaptive(light: 0xFFFFFF, dark: 0x242D3E)
-    static let border = adaptive(light: 0xE2E7E4, dark: 0x38445C)
-    static let text = adaptive(light: 0x19201F, dark: 0xEDF3EF)
-    static let secondaryText = adaptive(light: 0x626D67, dark: 0xADBAB2)
-    static let accent = adaptive(light: 0x3264CE, dark: 0xA4C1FF)
-    static let onAccent = adaptive(light: 0xFFFFFF, dark: 0x102348)
-    static let inactiveControl = adaptive(light: 0xE1E5E3, dark: 0x3A4840)
-    static let inactiveSymbol = adaptive(light: 0x6A756F, dark: 0xB0BDB5)
+    static let canvas = Color(uiColor: .systemGroupedBackground)
+    static let surface = Color(uiColor: .secondarySystemGroupedBackground)
+    static let elevatedSurface = adaptive(light: 0xFFFFFF, dark: 0x242529)
+    static let composer = adaptive(light: 0xFFFFFF, dark: 0x1C1C1E)
+    static let userBubble = adaptive(light: 0xE8F0FE, dark: 0x182B49)
+    static let guidanceBubble = adaptive(light: 0xEEF4FF, dark: 0x17253B)
+    static let border = Color(uiColor: .separator).opacity(0.32)
+    static let text = Color(uiColor: .label)
+    static let secondaryText = Color(uiColor: .secondaryLabel)
+    static let accent = adaptive(light: 0x0066EE, dark: 0x4C9AFF)
+    static let onAccent = adaptive(light: 0xFFFFFF, dark: 0x071830)
+    static let inactiveControl = Color(uiColor: .tertiarySystemFill)
+    static let inactiveSymbol = Color(uiColor: .tertiaryLabel)
 
     private static func adaptive(light: UInt32, dark: UInt32) -> Color {
         Color(uiColor: UIColor { traits in
