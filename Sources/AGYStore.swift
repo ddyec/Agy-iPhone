@@ -27,7 +27,14 @@ struct AGYDraftAttachment: Identifiable {
     @Published var cwd = ""
     @Published var model = ""
     @Published var mode = "plan"
-    @Published var draft = ""
+    let composer = AGYComposerState()
+    var draft: String {
+        get { composer.text }
+        set {
+            if composer.text != newValue { composer.text = newValue }
+            if newValue.isEmpty && composer.hasUncommittedText { composer.hasUncommittedText = false }
+        }
+    }
     @Published var error: String?
     @Published var connection = "尚未连接"
     @Published var pending: PendingSend?
@@ -45,6 +52,7 @@ struct AGYDraftAttachment: Identifiable {
     let liveActivity = AGYLiveActivity()
     private var streamTask: Task<Void, Never>?
     private var heartbeatTask: Task<Void, Never>?
+    private var draftSaveTask: Task<Void, Never>?
     private var backgroundDeadline: Task<Void, Never>?
     private var backgroundID: UIBackgroundTaskIdentifier = .invalid
     private var epoch = UUID()
@@ -60,7 +68,8 @@ struct AGYDraftAttachment: Identifiable {
         var references: [String]?
         var delivery: String?
     }
-    var canSend: Bool { connected && gatewayReady && (references.isEmpty || fileBrowserReady) && !busy && !importing && pending == nil && (selected?.running != true || queueReady) && (!draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !attachments.isEmpty || !references.isEmpty) }
+    var canSendReady: Bool { connected && gatewayReady && (references.isEmpty || fileBrowserReady) && !busy && !importing && pending == nil && (selected?.running != true || queueReady) }
+    var canSend: Bool { canSendReady && (composer.hasContent || !attachments.isEmpty || !references.isEmpty) }
     var currentFamily: AGYModelFamily? { families.first { $0.variants.contains { $0.id == model } } }
     var baseModel: String { currentFamily?.id ?? selected?.baseModel ?? model }
     var effort: String { currentFamily?.variants.first { $0.id == model }?.effort ?? selected?.effort ?? "" }
@@ -228,6 +237,7 @@ struct AGYDraftAttachment: Identifiable {
         return session.id
     }
     func send(delivery: String? = nil) async {
+        composer.flushActiveInput()
         guard canSend, let api else { return }
         let selectedDelivery = delivery ?? (selected?.running == true ? "queue" : "normal")
         guard selectedDelivery != "steer" || (steeringReady && approvalMode != "legacy") else { error = "请先更新支持引导的网关"; return }
@@ -450,6 +460,7 @@ struct AGYDraftAttachment: Identifiable {
     func scene(_ phase: ScenePhase) {
         if phase == .inactive { beginBackgroundTime() }
         if phase == .background {
+            saveDraft()
             foreground = false
             if selected?.running == true, liveActivity.enabled {
                 beginBackgroundTime()
@@ -468,9 +479,23 @@ struct AGYDraftAttachment: Identifiable {
             else if connected { Task { await reload() } }
         }
     }
-    func saveDraft() {
-        cache.write(draft, key: draftKey)
-        cache.write(references, key: "references-" + draftKey)
+    func saveDraft(debounced: Bool = false) {
+        draftSaveTask?.cancel()
+        if !debounced { composer.flushActiveInput() }
+        let currentDraft = draft
+        let currentRefs = references
+        let key = draftKey
+        if debounced {
+            draftSaveTask = Task { [weak self] in
+                try? await Task.sleep(for: .milliseconds(450))
+                guard !Task.isCancelled, let self else { return }
+                self.cache.write(currentDraft, key: key)
+                self.cache.write(currentRefs, key: "references-" + key)
+            }
+        } else {
+            cache.write(currentDraft, key: key)
+            cache.write(currentRefs, key: "references-" + key)
+        }
     }
     func disconnect() {
         liveActivity.clear(); heartbeatTask?.cancel(); endBackgroundTime()

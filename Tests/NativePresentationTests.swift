@@ -85,6 +85,17 @@ import Foundation
         check(inbox("pending", "steer").visibleInComposer && inbox("pending", "queue").visibleInComposer, "Waiting items remain visible in composer")
         check(inbox("held").visibleInComposer && inbox("unknown").visibleInComposer, "Held/uncertain items remain visible for user action")
         check(!inbox("delivered", "steer").visibleInComposer && !inbox("dispatching").visibleInComposer && !inbox("running").visibleInComposer && !inbox("done").visibleInComposer, "Dispatched/delivered items are hidden from bottom composer")
+        let svgWriteMsg = AGYMessage(id: "svg-msg", role: "assistant", text: "已生成架构图", tools: [
+            AGYTool(id: "1", name: "write_file", state: "DONE", parameters: .object([
+                "Path": .string("/workspace/架构 图.svg"),
+                "Content": .string("<svg viewBox=\"0 0 100 100\"><circle cx=\"50\" cy=\"50\" r=\"40\"/></svg>")
+            ]), output: "Created file.")
+        ], finalText: "已生成架构图")
+        let svgToolPresented = svgWriteMsg.presented[0]
+        check(NativeMediaReferences.writtenSVG(svgToolPresented).count == 1, "Extract written SVG from AGY write_file details[Content]")
+        check(NativeMediaReferences.paths(svgToolPresented).first?.path == "/workspace/架构 图.svg", "Extract POSIX image path with spaces/Unicode from details[Path]")
+        check(NativeMediaReferences.htmlDocument(language: "html", code: "<!doctype html><html><body><div>Hello</div></body></html>") != nil, "Recognize self-contained HTML preview blocks")
+        check(NativeMediaReferences.htmlDocument(language: "swift", code: "let x = \"<html>\"") == nil, "Never treat non-HTML code blocks as HTML documents")
         print("Passed \(checks) conversation presentation and download link checks")
     }
 }

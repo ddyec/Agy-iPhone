@@ -30,6 +30,19 @@ private struct NativeTurnTimeline: View {
         executionSections.filter { $0.kind == .tools }.flatMap(\.messages)
     }
 
+    private var surfacedToolSVGs: [String] {
+        let conclusionText = turn.conclusion?.text ?? ""
+        guard !conclusionText.lowercased().contains(".svg") else { return [] }
+        var seen = Set(NativeMediaReferences.svgs(conclusionText))
+        var result: [String] = []
+        for message in toolMessages {
+            for svg in NativeMediaReferences.writtenSVG(message) where seen.insert(svg).inserted {
+                result.append(svg)
+            }
+        }
+        return result
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             if let user = turn.user {
@@ -51,6 +64,11 @@ private struct NativeTurnTimeline: View {
                 .overlay(Capsule().strokeBorder(NativeTheme.border, lineWidth: 0.5))
             } else {
                 settledProcess
+                if !executionExpanded && !surfacedToolSVGs.isEmpty {
+                    ForEach(surfacedToolSVGs, id: \.self) { svg in
+                        NativeMediaPreview(svgMarkup: svg)
+                    }
+                }
             }
             if let final = turn.conclusion {
                 NativeMessageRow(message: final).id(final.id)

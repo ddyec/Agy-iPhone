@@ -202,18 +202,31 @@ struct NativeMarkdown: View {
             ForEach(Array(MarkdownBlock.parse(text).enumerated()), id: \.offset) { _, block in
                 switch block {
                 case .text(let value):
-                    if let svg = NativeMediaReferences.svg(value) {
-                        let stripped = value.replacingOccurrences(of: svg, with: "").trimmingCharacters(in: .whitespacesAndNewlines)
+                    let inlineSVGs = NativeMediaReferences.svgs(value)
+                    if !inlineSVGs.isEmpty {
+                        let stripped = inlineSVGs.reduce(value) { $0.replacingOccurrences(of: $1, with: "") }
+                            .trimmingCharacters(in: .whitespacesAndNewlines)
                         if !stripped.isEmpty { paragraphs(stripped) }
-                        NativeMediaPreview(data: Data(svg.utf8))
-                        NativeCodeBlock(language: "SVG 源码", code: svg, collapsed: true)
+                        ForEach(Array(inlineSVGs.enumerated()), id: \.offset) { _, svg in
+                            NativeMediaPreview(svgMarkup: svg)
+                            NativeCodeBlock(language: "SVG 源码", code: svg, collapsed: true)
+                        }
                     } else {
                         paragraphs(value)
                     }
                 case .code(let language, let code):
-                    if let svg = NativeMediaReferences.svg(code) { NativeMediaPreview(data: Data(svg.utf8)) }
-                    NativeCodeBlock(language: language, code: code, collapsed: NativeMediaReferences.svg(code) != nil || outputMode != NativeOutputMode.original.rawValue)
-                        .id(outputMode + language)
+                    if let svg = NativeMediaReferences.svg(code) {
+                        NativeMediaPreview(svgMarkup: svg)
+                        NativeCodeBlock(language: language.isEmpty ? "SVG 源码" : language, code: code, collapsed: true)
+                            .id("svg-code-" + language)
+                    } else if let html = NativeMediaReferences.htmlDocument(language: language, code: code) {
+                        NativeHTMLPreviewCard(html: html)
+                        NativeCodeBlock(language: language.isEmpty ? "HTML 源码" : language, code: code, collapsed: true)
+                            .id("html-code-" + language)
+                    } else {
+                        NativeCodeBlock(language: language, code: code, collapsed: outputMode != NativeOutputMode.original.rawValue)
+                            .id(outputMode + language)
+                    }
                 case .table(let rows):
                     ScrollView(.horizontal) {
                         Grid(alignment: .topLeading, horizontalSpacing: 0, verticalSpacing: 0) {
@@ -411,5 +424,47 @@ struct NativeCodeBlock: View {
         .background(Color(uiColor: .tertiarySystemFill), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(NativeTheme.border, lineWidth: 0.5))
+    }
+}
+
+private struct NativeHTMLPreviewCard: View {
+    let html: String
+    @State private var fullScreen = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 8) {
+                Image(systemName: "safari")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(NativeTheme.accent)
+                Text("HTML 实时渲染预览")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Button { fullScreen = true } label: {
+                    Label("全屏交互", systemImage: "arrow.up.left.and.arrow.down.right")
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(NativeTheme.accent)
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(Color(uiColor: .quaternarySystemFill))
+
+            Divider().opacity(0.5)
+
+            NativeSandboxedWebPreview(markup: html, isSVG: false, interactive: true)
+                .frame(maxWidth: .infinity)
+                .frame(height: 260)
+                .background(Color.white)
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(NativeTheme.border, lineWidth: 0.5))
+        .fullScreenCover(isPresented: $fullScreen) {
+            NativeFullScreenWebViewer(title: "HTML 预览", markup: html, isSVG: false) {
+                fullScreen = false
+            }
+        }
     }
 }

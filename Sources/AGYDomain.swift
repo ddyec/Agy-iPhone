@@ -5,7 +5,7 @@ struct AGYModel: Codable, Identifiable, Hashable {
     let name: String
     var family: String { name.components(separatedBy: " (").first ?? name }
 }
-struct AGYAttachment: Codable, Identifiable {
+struct AGYAttachment: Codable, Identifiable, Equatable {
     let id: String
     let name: String
     let mime: String
@@ -13,7 +13,7 @@ struct AGYAttachment: Codable, Identifiable {
     var path: String?
 }
 struct AGYModelVariant: Codable, Hashable { let id: String; let effort: String }
-struct AGYModelFamily: Codable, Identifiable {
+struct AGYModelFamily: Codable, Identifiable, Equatable {
     let id: String
     let name: String
     let variants: [AGYModelVariant]
@@ -31,7 +31,7 @@ enum AGYApprovalMode: String, CaseIterable, Identifiable {
     var title: String { self == .review ? "Restriction Mode · 逐项审批" : "Turbo Mode · 自动执行" }
     var detail: String { self == .review ? "每次工具操作都等待你的允许或拒绝，包括读取文件。审批超时或断开时拒绝执行。" : "无需逐项审批即可读写文件、执行命令和使用工具；服务器明确禁止的规则仍有效。" }
 }
-struct AGYApproval: Codable, Identifiable {
+struct AGYApproval: Codable, Identifiable, Equatable {
     let id: String
     let sessionID: String
     let tool: String
@@ -39,8 +39,8 @@ struct AGYApproval: Codable, Identifiable {
     let createdAt: Double
     let expiresAt: Double
 }
-struct AGYGuidance: Codable { let id: String; let index: Int; let text: String }
-struct AGYInboxItem: Codable, Identifiable {
+struct AGYGuidance: Codable, Equatable { let id: String; let index: Int; let text: String }
+struct AGYInboxItem: Codable, Identifiable, Equatable {
     let id: String
     let sessionID: String
     let delivery: String
@@ -65,7 +65,7 @@ struct AGYInboxItem: Codable, Identifiable {
         }
     }
 }
-struct AGYResponseStep: Codable { let index: Int; let text: String; var thinking: String? }
+struct AGYResponseStep: Codable, Equatable { let index: Int; let text: String; var thinking: String? }
 struct AGYLimits: Decodable {
     let fetchedAt: Double
     let source: String
@@ -86,7 +86,7 @@ struct AGYLimitBucket: Decodable, Identifiable {
     var reset: Date? { reset_time.flatMap { ISO8601DateFormatter().date(from: $0) } }
     var title: String { window == "5h" ? "5 小时额度" : window == "weekly" ? "每周额度" : name }
 }
-struct AGYTool: Codable, Identifiable {
+struct AGYTool: Codable, Identifiable, Equatable {
     let id: String
     let name: String
     let state: String
@@ -94,7 +94,7 @@ struct AGYTool: Codable, Identifiable {
     let output: String
     var isError: Bool?
 }
-struct AGYMessage: Codable, Identifiable {
+struct AGYMessage: Codable, Identifiable, Equatable {
     let id: String
     let role: String
     let text: String
@@ -159,7 +159,7 @@ struct AGYMessage: Codable, Identifiable {
     }
 
 }
-struct AGYSession: Codable, Identifiable {
+struct AGYSession: Codable, Identifiable, Equatable {
     let id: String
     var name: String
     let cwd: String
@@ -204,7 +204,7 @@ enum AGYError: LocalizedError {
     var errorDescription: String? { if case .message(let text) = self { return text }; return nil }
 }
 
-struct AGYFileEntry: Codable, Identifiable {
+struct AGYFileEntry: Codable, Identifiable, Equatable {
     let name: String
     let path: String
     let directory: Bool
