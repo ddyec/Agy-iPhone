@@ -10,10 +10,12 @@ struct AGYDraftAttachment: Identifiable {
 
 @MainActor final class AGYStore: ObservableObject {
     @Published var tab = 0
+    @Published var chatPath: [String] = []
     @Published var connected = false
     @Published var busy = false
     @Published var sessions: [AGYSession] = []
     @Published var selected: AGYSession? { didSet { updateLiveActivity() } }
+    @Published private(set) var homeConfig = AGYConfigurationMemory(model: "", approvalMode: "review", mode: "plan", workspace: "")
     @Published var models: [AGYModel] = []
     @Published var families: [AGYModelFamily] = []
     @Published var approvalMode = "review"
@@ -70,6 +72,16 @@ struct AGYDraftAttachment: Identifiable {
     var currentFamily: AGYModelFamily? { families.first { $0.variants.contains { $0.id == model } } }
     var baseModel: String { currentFamily?.id ?? selected?.baseModel ?? model }
     var effort: String { currentFamily?.variants.first { $0.id == model }?.effort ?? selected?.effort ?? "" }
+    func modelSummary(for modelID: String) -> String {
+        let family = families.first { $0.variants.contains { $0.id == modelID } }
+        let modelName = family?.name ?? "默认模型"
+        let effortValue = family?.variants.first { $0.id == modelID }?.effort ?? ""
+        let effortLabel = AGYThinking.title(effortValue)
+        if effortLabel.isEmpty || effortLabel == "由模型决定" {
+            return modelName
+        }
+        return "\(modelName) · \(effortLabel)"
+    }
     var presentedMessages: [ChatMessage] { (selected?.messages ?? []).flatMap(\.presented) }
     var draftKey: String { "draft-" + (selected?.id ?? "new") }
     var storedURL: String {
@@ -123,7 +135,7 @@ struct AGYDraftAttachment: Identifiable {
             let profile = credentials.url.absoluteString + "#" + (status.accountProfile ?? "legacy")
             if UserDefaults.standard.string(forKey: "activeAccountProfile") != profile {
                 liveActivity.clear()
-                cache.clear(); sessions = []; selected = nil; draft = ""; attachments = []; references = []; pending = nil; limits = nil
+                cache.clear(); sessions = []; selected = nil; chatPath = []; draft = ""; attachments = []; references = []; pending = nil; limits = nil
                 SecureStore.delete("pending-send"); attachmentContext = UUID()
                 UserDefaults.standard.removeObject(forKey: "draft")
             }
@@ -137,6 +149,7 @@ struct AGYDraftAttachment: Identifiable {
                 catch {
                     guard epoch == token else { return }
                     cwd = roots.first ?? ""
+                    homeConfig.workspace = cwd
                     self.error = "上次选择的项目目录暂不可用，已返回工作区。"
                 }
             }
@@ -159,21 +172,39 @@ struct AGYDraftAttachment: Identifiable {
             cache.write(sessions, key: "sessions")
         } catch { if epoch == token { self.error = error.localizedDescription } }
     }
-    func select(_ id: String) async {
+    func select(_ id: String, enterConversation: Bool = true) async {
         let switching = selected?.id != id
-        if switching { saveDraft(); attachmentContext = UUID(); attachments = []; references = []; importing = false }
+        var loadedDraft = !switching
+        if switching {
+            saveDraft()
+            attachmentContext = UUID(); attachments = []; references = []; importing = false
+        }
+        if enterConversation && chatPath != [id] { chatPath = [id] }
         selectionEpoch = UUID(); let token = selectionEpoch, account = epoch
         streamTask?.cancel(); heartbeatTask?.cancel()
         guard let api else { return }
         busy = true; error = nil
-        if switching, let cached = cache.read("session-" + id, as: AGYSession.self) { selected = cached; connection = "显示本机缓存" }
+        if switching {
+            if let cached = cache.read("session-" + id, as: AGYSession.self) {
+                selected = cached; cwd = cached.cwd; model = cached.model; mode = cached.mode
+                approvalMode = cached.approvalMode ?? "legacy"
+                connection = "显示本机缓存"
+                draft = cache.read(draftKey, as: String.self) ?? ""
+                references = cache.read("references-" + draftKey, as: [AGYFileEntry].self) ?? []
+                loadedDraft = true
+            } else {
+                selected = nil
+                draft = ""
+                references = []
+            }
+        }
         defer { if selectionEpoch == token { busy = false } }
         do {
             let s: AGYSession = try await api.json("sessions/\(id)")
             guard token == selectionEpoch, epoch == account else { return }
             selected = s; cwd = s.cwd; model = s.model; mode = s.mode
             approvalMode = s.approvalMode ?? "legacy"
-            if switching {
+            if !loadedDraft {
                 draft = cache.read(draftKey, as: String.self) ?? ""
                 references = cache.read("references-" + draftKey, as: [AGYFileEntry].self) ?? []
             }
@@ -182,22 +213,47 @@ struct AGYDraftAttachment: Identifiable {
             watch(id)
         } catch { if token == selectionEpoch { self.error = error.localizedDescription } }
     }
+    func handlePoppedToHome() {
+        composer.dismissKeyboard()
+        guard selected != nil || busy || error != nil else { return }
+        if selected != nil { saveDraft() }
+        selectionEpoch = UUID()
+        streamTask?.cancel()
+        heartbeatTask?.cancel()
+        endBackgroundTime()
+        selected = nil
+        busy = false
+        error = nil
+        uploadProgress = ""
+        connection = "已就绪"
+        restoreConfiguration()
+        draft = cache.read(draftKey, as: String.self) ?? ""
+        attachmentContext = UUID()
+        attachments = []
+        references = cache.read("references-" + draftKey, as: [AGYFileEntry].self) ?? []
+        importing = false
+        Task { await reload() }
+    }
     func newConversation() {
         guard pending == nil else { error = "请先核对上一条发送结果。"; return }
-        saveDraft(); selectionEpoch = UUID(); streamTask?.cancel(); heartbeatTask?.cancel(); endBackgroundTime(); selected = nil; error = nil; connection = "已就绪"
-        draft = cache.read(draftKey, as: String.self) ?? ""
+        composer.dismissKeyboard()
+        saveDraft(); selectionEpoch = UUID(); streamTask?.cancel(); heartbeatTask?.cancel(); endBackgroundTime(); selected = nil; busy = false; error = nil; uploadProgress = ""; connection = "已就绪"
         restoreConfiguration()
+        draft = cache.read(draftKey, as: String.self) ?? ""
         attachmentContext = UUID(); attachments = []; references = cache.read("references-" + draftKey, as: [AGYFileEntry].self) ?? []; importing = false
+        if !chatPath.isEmpty { chatPath = [] }
     }
     private func restoreConfiguration() {
         let saved = AGYConfigurationMemory.load(scope: configurationScope)
             ?? AGYConfigurationMemory(model: defaultModel, approvalMode: "review", mode: "plan", workspace: roots.first ?? "")
         let valid = saved.validated(models: models.map(\.id), defaultModel: defaultModel, roots: roots)
         model = valid.model; approvalMode = valid.approvalMode; mode = valid.mode; cwd = valid.workspace
+        homeConfig = valid
     }
     private func rememberConfiguration() {
-        AGYConfigurationMemory(model: model, approvalMode: approvalMode, mode: mode, workspace: cwd)
-            .save(scope: configurationScope)
+        let memory = AGYConfigurationMemory(model: model, approvalMode: approvalMode, mode: mode, workspace: cwd)
+        memory.save(scope: configurationScope)
+        homeConfig = memory
     }
     func chooseWorkspace(_ path: String) {
         guard selected == nil, !busy else { return }
@@ -256,6 +312,7 @@ struct AGYDraftAttachment: Identifiable {
                 cache.remove("draft-new"); cache.remove("references-draft-new")
             }
             guard let id = selected?.id else { return }
+            if chatPath != [id] { chatPath = [id] }
             for i in attachments.indices {
                 if attachments[i].uploaded == nil {
                     uploadProgress = "正在上传 \(i + 1)/\(attachments.count)：\(attachments[i].imported.name)"
@@ -381,7 +438,7 @@ struct AGYDraftAttachment: Identifiable {
     }
     func rename(_ s: AGYSession, name: String) async {
         guard let api else { return }
-        do { let _: AGYSession = try await api.json("sessions/\(s.id)", method: "PATCH", body: .object(["name": .string(name)])); await reload(); if selected?.id == s.id { await select(s.id) } }
+        do { let _: AGYSession = try await api.json("sessions/\(s.id)", method: "PATCH", body: .object(["name": .string(name)])); await reload(); if selected?.id == s.id { await select(s.id, enterConversation: !chatPath.isEmpty) } }
         catch { self.error = error.localizedDescription }
     }
     func delete(_ s: AGYSession) async {
@@ -487,7 +544,7 @@ struct AGYDraftAttachment: Identifiable {
         }
         if phase == .active {
             foreground = true; endBackgroundTime()
-            if let id = selected?.id { Task { await select(id) } }
+            if let id = selected?.id { Task { await select(id, enterConversation: !self.chatPath.isEmpty) } }
             else if connected { Task { await reload() } }
         }
     }
@@ -513,7 +570,7 @@ struct AGYDraftAttachment: Identifiable {
         liveActivity.clear(); heartbeatTask?.cancel(); endBackgroundTime()
         epoch = UUID(); selectionEpoch = UUID(); streamTask?.cancel(); api?.invalidate(); api = nil
         SecureStore.delete("connection"); SecureStore.delete("pending-send"); pending = nil
-        connected = false; busy = false; sessions = []; selected = nil; draft = ""; saveDraft(); error = nil; connection = "尚未连接"
+        connected = false; busy = false; sessions = []; selected = nil; chatPath = []; draft = ""; saveDraft(); error = nil; connection = "尚未连接"
         attachmentContext = UUID(); attachments = []; references = []; importing = false; uploadProgress = ""; limits = nil; limitsLoading = false; modelsLoading = false
         cache.clear(); queueReady = false; steeringReady = false; configurationScope = ""; defaultModel = ""; fileBrowserReady = false; gatewayReady = false; families = []; accountProfile = ""; UserDefaults.standard.removeObject(forKey: "activeAccountProfile")
     }

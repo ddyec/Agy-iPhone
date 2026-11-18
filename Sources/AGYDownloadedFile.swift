@@ -78,7 +78,26 @@ struct AGYLocalDownloads: View {
             if let issue { Text(issue).foregroundStyle(.red) }
             if files.isEmpty { Text("尚无本机下载").foregroundStyle(.secondary) }
             ForEach(files, id: \.self) { file in
-                Button { preview = PreviewDocument(url: file) } label: { Label(file.lastPathComponent, systemImage: "doc") }
+                let values = try? file.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey])
+                Button { preview = PreviewDocument(url: file) } label: {
+                    HStack(spacing: 10) {
+                        Image(systemName: "doc.text")
+                            .foregroundStyle(.secondary)
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(file.lastPathComponent)
+                                .foregroundStyle(.primary)
+                                .lineLimit(2)
+                            Text(AGYFilePresentation.metadataLine(
+                                directory: false,
+                                size: Int64(values?.fileSize ?? 0),
+                                modified: values?.contentModificationDate?.timeIntervalSince1970 ?? 0
+                            ))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                        }
+                    }
+                }
             }
         }.navigationTitle("本机已下载")
             .task { load() }.refreshable { load() }

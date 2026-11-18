@@ -6,6 +6,8 @@ xcrun swiftc -parse-as-library Sources/NativeCore.swift Sources/AGYDomain.swift 
 build/presentation
 xcrun swiftc -parse-as-library Sources/NativeScrollPolicy.swift Tests/NativeScrollPolicyTests.swift -o build/scroll
 build/scroll
+xcrun swiftc -parse-as-library Sources/AGYFilePresentation.swift Tests/AGYFilePresentationTests.swift -o build/files
+build/files
 swift scripts/prepare-icon.swift
 xcodebuild -project AGY.xcodeproj -scheme AGY -configuration Release \
   -destination 'generic/platform=iOS' -archivePath build/AGY.xcarchive \

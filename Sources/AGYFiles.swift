@@ -71,10 +71,15 @@ struct AGYFiles: View {
                             if entry.directory { enter(entry) } else { Task { await download(entry) } }
                         } label: {
                             HStack {
-                                Image(systemName: entry.directory ? "folder.fill" : "doc")
+                                Image(systemName: entry.directory ? "folder.fill" : "doc.text")
+                                    .foregroundStyle(entry.directory ? NativeTheme.accent : .secondary)
+                                    .frame(width: 22)
                                 VStack(alignment: .leading, spacing: 4) {
                                     Text(entry.name).foregroundStyle(.primary).lineLimit(2)
-                                    Text(entry.directory ? "文件夹" : ByteCountFormatter.string(fromByteCount: entry.size, countStyle: .file)).font(.caption).foregroundStyle(.secondary)
+                                    Text(AGYFilePresentation.metadataLine(directory: entry.directory, size: entry.size, modified: entry.modified))
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                        .lineLimit(1)
                                 }
                                 Spacer()
                                 if entry.directory { Image(systemName: "chevron.right").font(.caption) }
@@ -215,7 +220,19 @@ struct AGYWorkspacePicker: View {
             }.disabled(listing == nil || store.selected != nil)
             if let issue { Text(issue).foregroundStyle(.red); Button("重试") { Task { await load() } } }
             ForEach((listing?.entries ?? []).filter(\.directory)) { entry in
-                Button { path = [path, entry.name].filter { !$0.isEmpty }.joined(separator: "/"); Task { await load() } } label: { Label(entry.name, systemImage: "folder") }
+                Button { path = [path, entry.name].filter { !$0.isEmpty }.joined(separator: "/"); Task { await load() } } label: {
+                    HStack(spacing: 10) {
+                        Image(systemName: "folder.fill")
+                            .foregroundStyle(NativeTheme.accent)
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(entry.name)
+                                .foregroundStyle(.primary)
+                            Text(AGYFilePresentation.metadataLine(directory: true, size: entry.size, modified: entry.modified))
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
             }
         }.navigationTitle("选择项目文件夹")
             .task { root = store.roots.first ?? ""; await load() }

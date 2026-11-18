@@ -6,8 +6,22 @@ import UIKit
 @MainActor final class AGYComposerState: ObservableObject {
     @Published var text: String = ""
     @Published var hasUncommittedText: Bool = false
-    weak var activeTextView: UITextView?
+    private let mountedViews = NSHashTable<UITextView>.weakObjects()
+    weak var lastFocusedView: UITextView?
     var isApplyingProgrammaticText = false
+
+    func register(_ view: UITextView) {
+        if !mountedViews.contains(view) {
+            mountedViews.add(view)
+        }
+    }
+
+    var activeTextView: UITextView? {
+        let views = mountedViews.allObjects
+        return views.first(where: { $0.isFirstResponder })
+            ?? (lastFocusedView?.window != nil ? lastFocusedView : nil)
+            ?? views.first(where: { $0.window != nil })
+    }
 
     var hasContent: Bool {
         hasUncommittedText || !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -27,12 +41,24 @@ import UIKit
         if hasUncommittedText {
             hasUncommittedText = false
         }
+        for other in mountedViews.allObjects where other !== tv && other.text != latest {
+            UIView.performWithoutAnimation {
+                other.text = latest
+                let length = (latest as NSString).length
+                other.selectedRange = NSRange(location: latest.isEmpty ? 0 : length, length: 0)
+                if let composerView = other as? NativeComposerInput.ComposerTextView {
+                    composerView.refreshPlaceholderVisibility()
+                    composerView.refreshScrollState(maxLines: 6)
+                }
+                other.invalidateIntrinsicContentSize()
+            }
+        }
     }
 
     func setText(_ newValue: String, maxLines: Int = 6) {
         isApplyingProgrammaticText = true
         defer { isApplyingProgrammaticText = false }
-        if let tv = activeTextView {
+        for tv in mountedViews.allObjects {
             if tv.markedTextRange != nil {
                 tv.unmarkText()
             }
@@ -64,7 +90,7 @@ import UIKit
     }
 
     func dismissKeyboard() {
-        if let tv = activeTextView, tv.isFirstResponder {
+        for tv in mountedViews.allObjects where tv.isFirstResponder {
             tv.resignFirstResponder()
         }
     }
@@ -99,14 +125,16 @@ struct NativeComposerInput: UIViewRepresentable {
         view.keyboardDismissMode = .interactive
         view.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         view.setContentHuggingPriority(.defaultHigh, for: .vertical)
+        view.text = state.text
         view.configurePlaceholder(placeholder)
-        state.activeTextView = view
+        view.refreshPlaceholderVisibility()
+        state.register(view)
         return view
     }
 
     func updateUIView(_ uiView: ComposerTextView, context: Context) {
         context.coordinator.parent = self
-        state.activeTextView = uiView
+        state.register(uiView)
         uiView.updatePlaceholderText(placeholder)
 
         // Never overwrite UITextView while Chinese handwriting / Pinyin IME has
@@ -213,7 +241,8 @@ struct NativeComposerInput: UIViewRepresentable {
         }
 
         func textViewDidBeginEditing(_ textView: UITextView) {
-            parent.state.activeTextView = textView
+            parent.state.register(textView)
+            parent.state.lastFocusedView = textView
             if !parent.focused {
                 parent.focused = true
             }
@@ -223,6 +252,8 @@ struct NativeComposerInput: UIViewRepresentable {
             if parent.focused {
                 parent.focused = false
             }
+            guard !isProgrammaticUpdate && !parent.state.isApplyingProgrammaticText else { return }
+            guard textView === parent.state.lastFocusedView || textView.window != nil else { return }
             let latest = textView.text ?? ""
             if parent.state.hasUncommittedText {
                 parent.state.hasUncommittedText = false

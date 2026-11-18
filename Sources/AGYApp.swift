@@ -171,168 +171,338 @@ struct AGYConnection: View {
 struct AGYChat: View {
     @EnvironmentObject private var store: AGYStore
     @State private var showConfiguration = false
-    @State private var following = true
-    @State private var jumpToLatest = 0
     @AppStorage("nativeOutputMode") private var outputMode = NativeOutputMode.steps.rawValue
     @State private var showFiles = false
     @State private var attachmentPicker: AGYAttachmentPicker?
     @State private var pickerContext = UUID()
-    @State private var composerFocused = false
+    @State private var homeComposerFocused = false
 
-    private var activeComposerInbox: [AGYInboxItem] {
-        (store.selected?.inbox ?? []).filter(\.visibleInComposer)
-    }
-
-    private var isEmptyHome: Bool {
-        store.selected?.messages?.isEmpty != false && (store.selected?.approvals?.isEmpty != false)
-    }
-
-    var body: some View {
-        NavigationStack {
-            ScrollViewReader { _ in
-                ScrollView {
-                    AGYTranscriptContent(
-                        selected: store.selected,
-                        recentSessions: Array(store.sessions.prefix(3)),
-                        totalSessionCount: store.sessions.count,
-                        cwd: store.cwd,
-                        modelSummary: modelSummaryLabel,
-                        mode: store.mode,
-                        approvalMode: store.approvalMode,
-                        outputMode: outputMode,
-                        error: store.error,
-                        pendingSessionID: store.pending?.sessionID,
-                        busy: store.busy,
-                        onSelectPrompt: { prompt in
-                            store.draft = prompt
-                            store.saveDraft(debounced: true)
-                            composerFocused = true
-                        },
-                        onOpenConfiguration: { showConfiguration = true },
-                        onOpenFiles: {
-                            if !store.busy && store.pending == nil { showFiles = true }
-                        },
-                        onPickPhotos: {
-                            if !store.busy && !store.importing && store.pending == nil && store.attachments.count < 8 {
-                                pickerContext = store.attachmentContext
-                                attachmentPicker = .photos
-                            }
-                        },
-                        onSelectSession: { id in Task { await store.select(id) } },
-                        onOpenHistory: { store.tab = 1 },
-                        onRetryPending: { Task { await store.retryPending() } }
-                    )
-                    .equatable()
-                    .padding(.horizontal, 16)
-                    .padding(.top, isEmptyHome ? 6 : 12)
-                    .padding(.bottom, isEmptyHome ? 10 : 14)
-                    .background(NativeScrollFollow(conversation: store.selected?.id ?? "new", active: !isEmptyHome, jump: jumpToLatest, following: $following).frame(width: 0, height: 0))
-                }
-                .scrollDismissesKeyboard(.interactively)
-                .overlay(alignment: .bottomTrailing) {
-                    if !following && !isEmptyHome {
-                        Button { jumpToLatest += 1 } label: {
-                            Image(systemName: "arrow.down")
-                                .font(.subheadline.weight(.semibold))
-                                .foregroundStyle(.primary)
-                                .frame(width: 38, height: 38)
-                                .background(.regularMaterial, in: Circle())
-                                .overlay(Circle().strokeBorder(NativeTheme.border, lineWidth: 0.5))
-                                .shadow(color: .black.opacity(0.08), radius: 8, y: 3)
-                        }
-                        .accessibilityLabel("回到最新消息")
-                        .padding(.trailing, 16)
-                        .padding(.bottom, 10)
-                    }
-                }
-                .safeAreaInset(edge: .bottom, spacing: 0) { composer }
-                .background(NativeTheme.canvas)
-            }
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
-                    Button { showConfiguration = true } label: {
-                        Image(systemName: "slider.horizontal.3")
-                    }
-                    .accessibilityLabel("模型和工作目录")
-                }
-                ToolbarItem(placement: .principal) {
-                    Button { showConfiguration = true } label: {
-                        VStack(spacing: 1) {
-                            Text(store.selected?.name ?? "AGY")
-                                .font(.subheadline.weight(.semibold))
-                                .foregroundStyle(.primary)
-                                .lineLimit(1)
-                            HStack(spacing: 5) {
-                                Circle()
-                                    .fill(statusColor)
-                                    .frame(width: 6, height: 6)
-                                Text(headerSubtitle)
-                                    .font(.caption2)
-                                    .foregroundStyle(.secondary)
-                                    .lineLimit(1)
-                            }
-                        }
-                    }
-                    .buttonStyle(.plain)
-                }
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button { store.newConversation() } label: {
-                        Image(systemName: "square.and.pencil")
-                    }
-                    .accessibilityLabel("新建对话")
-                    .disabled(store.busy || store.pending != nil)
-                }
-            }
-            .sheet(isPresented: $showFiles) {
-                AGYFiles(picking: true).presentationDetents([.medium, .large]).presentationDragIndicator(.visible)
-            }
-            .sheet(isPresented: $showConfiguration) { AGYConfiguration() }
-            .sheet(item: $attachmentPicker) { picker in
-                if picker == .photos {
-                    NativePhotoPicker(limit: max(1, 8 - store.attachments.count)) { results in
-                        let context = pickerContext; attachmentPicker = nil
-                        Task { await store.importPhotos(results, context: context) }
-                    }
-                } else {
-                    NativeDocumentPicker { urls in
-                        let context = pickerContext; attachmentPicker = nil
-                        Task { await store.importFiles(urls, context: context) }
-                    }
-                }
-            }
-        }
-    }
-
-    private var statusColor: Color {
-        if store.selected?.approvals?.isEmpty == false { return .orange }
-        if store.selected?.running == true { return NativeTheme.accent }
+    private var homeStatusColor: Color {
         if store.connection.contains("中断") || store.connection.contains("失败") { return .red }
         return .green
     }
 
-    private var modelSummaryLabel: String {
-        let modelName = store.currentFamily?.name ?? "默认模型"
-        let effortLabel = AGYThinking.title(store.effort)
-        if effortLabel == "由模型决定" || effortLabel.isEmpty {
-            return modelName
+    private var homeModelSummary: String {
+        store.modelSummary(for: store.selected == nil ? store.model : store.homeConfig.model)
+    }
+
+    private var homeCwd: String {
+        store.selected == nil ? store.cwd : store.homeConfig.workspace
+    }
+
+    private var homeMode: String {
+        store.selected == nil ? store.mode : store.homeConfig.mode
+    }
+
+    private var homeApprovalMode: String {
+        store.selected == nil ? store.approvalMode : store.homeConfig.approvalMode
+    }
+
+    var body: some View {
+        NavigationStack(path: $store.chatPath) {
+            homeScreen
+                .navigationDestination(for: String.self) { sessionID in
+                    AGYConversationScreen(
+                        sessionID: sessionID,
+                        outputMode: $outputMode,
+                        onOpenConfiguration: { showConfiguration = true },
+                        onOpenFiles: openFilesPicker,
+                        onPickPhotos: { startAttachmentPicker(.photos) },
+                        onPickDocuments: { startAttachmentPicker(.files) }
+                    )
+                }
         }
-        return "\(modelName) · \(effortLabel)"
+        .onChange(of: store.chatPath) { oldValue, newValue in
+            if !oldValue.isEmpty && newValue.isEmpty {
+                store.handlePoppedToHome()
+            }
+        }
+        .sheet(isPresented: $showFiles) {
+            AGYFiles(picking: true).presentationDetents([.medium, .large]).presentationDragIndicator(.visible)
+        }
+        .sheet(isPresented: $showConfiguration) { AGYConfiguration() }
+        .sheet(item: $attachmentPicker) { picker in
+            if picker == .photos {
+                NativePhotoPicker(limit: max(1, 8 - store.attachments.count)) { results in
+                    let context = pickerContext; attachmentPicker = nil
+                    Task { await store.importPhotos(results, context: context) }
+                }
+            } else {
+                NativeDocumentPicker { urls in
+                    let context = pickerContext; attachmentPicker = nil
+                    Task { await store.importFiles(urls, context: context) }
+                }
+            }
+        }
+    }
+
+    private var homeScreen: some View {
+        ScrollView {
+            AGYHomeContent(
+                recentSessions: Array(store.sessions.prefix(3)),
+                totalSessionCount: store.sessions.count,
+                cwd: homeCwd,
+                modelSummary: homeModelSummary,
+                mode: homeMode,
+                approvalMode: homeApprovalMode,
+                error: store.selected == nil ? store.error : nil,
+                pendingSessionID: store.pending?.sessionID,
+                busy: store.busy,
+                onSelectPrompt: { prompt in
+                    store.draft = prompt
+                    store.saveDraft(debounced: true)
+                    homeComposerFocused = true
+                },
+                onOpenConfiguration: { showConfiguration = true },
+                onOpenFiles: openFilesPicker,
+                onPickPhotos: {
+                    if !store.busy && !store.importing && store.pending == nil && store.attachments.count < 8 {
+                        startAttachmentPicker(.photos)
+                    }
+                },
+                onSelectSession: { id in Task { await store.select(id) } },
+                onOpenHistory: { store.tab = 1 },
+                onRetryPending: { Task { await store.retryPending() } }
+            )
+            .equatable()
+            .padding(.horizontal, 16)
+            .padding(.top, 12)
+            .padding(.bottom, 18)
+        }
+        .scrollDismissesKeyboard(.interactively)
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            AGYComposerDock(
+                focused: $homeComposerFocused,
+                outputMode: $outputMode,
+                activeInbox: [],
+                running: false,
+                onOpenFiles: openFilesPicker,
+                onOpenConfiguration: { showConfiguration = true },
+                onPickPhotos: { startAttachmentPicker(.photos) },
+                onPickDocuments: { startAttachmentPicker(.files) },
+                onJumpToLatest: nil
+            )
+        }
+        .background(NativeTheme.canvas)
+        .navigationTitle("AGY")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .topBarLeading) {
+                Button { showConfiguration = true } label: {
+                    Image(systemName: "slider.horizontal.3")
+                }
+                .accessibilityLabel("模型和工作目录")
+            }
+            ToolbarItem(placement: .principal) {
+                Button { showConfiguration = true } label: {
+                    VStack(spacing: 1) {
+                        Text("AGY")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(.primary)
+                            .lineLimit(1)
+                        HStack(spacing: 5) {
+                            Circle()
+                                .fill(homeStatusColor)
+                                .frame(width: 6, height: 6)
+                            Text(homeModelSummary)
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                        }
+                    }
+                }
+                .buttonStyle(.plain)
+            }
+            ToolbarItem(placement: .topBarTrailing) {
+                Button { store.newConversation() } label: {
+                    Image(systemName: "square.and.pencil")
+                }
+                .accessibilityLabel("新建对话")
+                .disabled(store.busy || store.pending != nil)
+            }
+        }
+    }
+
+    private func openFilesPicker() {
+        if !store.busy && store.pending == nil {
+            showFiles = true
+        }
+    }
+
+    private func startAttachmentPicker(_ picker: AGYAttachmentPicker) {
+        pickerContext = store.attachmentContext
+        attachmentPicker = picker
+    }
+}
+
+private struct AGYConversationScreen: View {
+    @EnvironmentObject private var store: AGYStore
+    let sessionID: String
+    @Binding var outputMode: String
+    let onOpenConfiguration: () -> Void
+    let onOpenFiles: () -> Void
+    let onPickPhotos: () -> Void
+    let onPickDocuments: () -> Void
+
+    @State private var following = true
+    @State private var jumpToLatest = 0
+    @State private var composerFocused = false
+
+    private var displayedSession: AGYSession? {
+        store.selected?.id == sessionID ? store.selected : nil
+    }
+
+    private var activeInbox: [AGYInboxItem] {
+        (displayedSession?.inbox ?? []).filter(\.visibleInComposer)
+    }
+
+    private var statusColor: Color {
+        if displayedSession?.approvals?.isEmpty == false { return .orange }
+        if displayedSession?.running == true { return NativeTheme.accent }
+        if store.connection.contains("中断") || store.connection.contains("失败") { return .red }
+        return .green
     }
 
     private var headerSubtitle: String {
-        if store.selected?.running == true {
+        if displayedSession?.running == true {
             return store.connection + " · " + (store.currentFamily?.name ?? "运行中")
         }
-        return modelSummaryLabel
+        return store.modelSummary(for: displayedSession?.model ?? store.model)
     }
 
-    private var composer: some View {
+    var body: some View {
+        ScrollView {
+            AGYConversationTranscript(
+                sessionID: sessionID,
+                selected: displayedSession,
+                outputMode: outputMode,
+                error: store.error,
+                pendingSessionID: store.pending?.sessionID,
+                busy: store.busy,
+                onSelectSession: { id in Task { await store.select(id) } },
+                onRetryPending: { Task { await store.retryPending() } }
+            )
+            .equatable()
+            .padding(.horizontal, 16)
+            .padding(.top, 12)
+            .padding(.bottom, 14)
+            .background(NativeScrollFollow(conversation: sessionID, active: true, jump: jumpToLatest, following: $following).frame(width: 0, height: 0))
+        }
+        .scrollDismissesKeyboard(.interactively)
+        .overlay(alignment: .bottomTrailing) {
+            if !following {
+                Button { jumpToLatest += 1 } label: {
+                    Image(systemName: "arrow.down")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.primary)
+                        .frame(width: 38, height: 38)
+                        .background(.regularMaterial, in: Circle())
+                        .overlay(Circle().strokeBorder(NativeTheme.border, lineWidth: 0.5))
+                        .shadow(color: .black.opacity(0.08), radius: 8, y: 3)
+                }
+                .accessibilityLabel("回到最新消息")
+                .padding(.trailing, 16)
+                .padding(.bottom, 10)
+            }
+        }
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            AGYComposerDock(
+                focused: $composerFocused,
+                outputMode: $outputMode,
+                activeInbox: activeInbox,
+                running: displayedSession?.running == true,
+                onOpenFiles: onOpenFiles,
+                onOpenConfiguration: onOpenConfiguration,
+                onPickPhotos: onPickPhotos,
+                onPickDocuments: onPickDocuments,
+                onJumpToLatest: { jumpToLatest += 1 }
+            )
+        }
+        .background(NativeInteractivePopConfigurator().frame(width: 0, height: 0))
+        .background(NativeTheme.canvas)
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .principal) {
+                Button(action: onOpenConfiguration) {
+                    VStack(spacing: 1) {
+                        Text(displayedSession?.name ?? "对话")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(.primary)
+                            .lineLimit(1)
+                        HStack(spacing: 5) {
+                            Circle()
+                                .fill(statusColor)
+                                .frame(width: 6, height: 6)
+                            Text(headerSubtitle)
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                        }
+                    }
+                }
+                .buttonStyle(.plain)
+            }
+            ToolbarItemGroup(placement: .topBarTrailing) {
+                Button(action: onOpenConfiguration) {
+                    Image(systemName: "slider.horizontal.3")
+                }
+                .accessibilityLabel("模型和工作目录")
+
+                Button { store.newConversation() } label: {
+                    Image(systemName: "square.and.pencil")
+                }
+                .accessibilityLabel("新建对话")
+                .disabled(store.busy || store.pending != nil)
+            }
+        }
+    }
+}
+
+private struct NativeInteractivePopConfigurator: UIViewRepresentable {
+    func makeUIView(context: Context) -> Probe { Probe() }
+    func updateUIView(_ uiView: Probe, context: Context) { uiView.enableInteractivePop() }
+
+    final class Probe: UIView {
+        override func didMoveToWindow() {
+            super.didMoveToWindow()
+            enableInteractivePop()
+        }
+
+        func enableInteractivePop() {
+            DispatchQueue.main.async { [weak self] in
+                var responder: UIResponder? = self
+                while let current = responder {
+                    if let nav = current as? UINavigationController {
+                        if nav.viewControllers.count > 1 {
+                            nav.interactivePopGestureRecognizer?.isEnabled = true
+                        }
+                        break
+                    }
+                    responder = current.next
+                }
+            }
+        }
+    }
+}
+
+private struct AGYComposerDock: View {
+    @EnvironmentObject private var store: AGYStore
+    @Binding var focused: Bool
+    @Binding var outputMode: String
+    let activeInbox: [AGYInboxItem]
+    let running: Bool
+    let onOpenFiles: () -> Void
+    let onOpenConfiguration: () -> Void
+    let onPickPhotos: () -> Void
+    let onPickDocuments: () -> Void
+    let onJumpToLatest: (() -> Void)?
+
+    var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            if !activeComposerInbox.isEmpty {
+            if !activeInbox.isEmpty {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 6) {
-                        ForEach(activeComposerInbox) { item in
+                        ForEach(activeInbox) { item in
                             HStack(alignment: .center, spacing: 10) {
                                 Image(systemName: item.delivery == "steer" ? "arrow.turn.up.right" : "clock.arrow.circlepath")
                                     .font(.caption.weight(.semibold))
@@ -452,7 +622,7 @@ struct AGYChat: View {
             }
 
             HStack(spacing: 8) {
-                Button { showFiles = true } label: {
+                Button(action: onOpenFiles) {
                     HStack(spacing: 4) {
                         Image(systemName: "at")
                         Text("引用文件")
@@ -467,7 +637,7 @@ struct AGYChat: View {
                 .foregroundStyle(NativeTheme.accent)
                 .disabled(store.busy || store.pending != nil)
 
-                Button { showConfiguration = true } label: {
+                Button(action: onOpenConfiguration) {
                     HStack(spacing: 4) {
                         Image(systemName: store.approvalMode == "turbo" ? "bolt.fill" : "checkmark.shield")
                             .font(.caption2)
@@ -505,34 +675,26 @@ struct AGYChat: View {
 
             AGYComposerInputRow(
                 composer: store.composer,
-                focused: $composerFocused,
+                focused: $focused,
                 canSendReady: store.canSendReady,
                 hasAttachmentsOrRefs: !store.attachments.isEmpty || !store.references.isEmpty,
                 attachmentDisabled: store.busy || store.importing || store.pending != nil || store.attachments.count >= 8,
                 busy: store.busy,
-                running: store.selected?.running == true,
+                running: running,
                 canSteer: store.steeringReady && store.approvalMode != "legacy",
-                onOpenFiles: {
-                    if !store.busy && store.pending == nil { showFiles = true }
-                },
-                onPickPhotos: {
-                    pickerContext = store.attachmentContext
-                    attachmentPicker = .photos
-                },
-                onPickDocuments: {
-                    pickerContext = store.attachmentContext
-                    attachmentPicker = .files
-                },
+                onOpenFiles: onOpenFiles,
+                onPickPhotos: onPickPhotos,
+                onPickDocuments: onPickDocuments,
                 onTextChanged: { store.saveDraft(debounced: true) },
                 onStop: { Task { await store.stop() } },
                 onSend: {
-                    composerFocused = false
+                    focused = false
                     store.composer.dismissKeyboard()
-                    if !isEmptyHome { jumpToLatest += 1 }
+                    onJumpToLatest?()
                     Task { await store.send() }
                 },
                 onDeliver: { delivery in
-                    composerFocused = false
+                    focused = false
                     store.composer.dismissKeyboard()
                     Task { await store.send(delivery: delivery) }
                 }
@@ -655,15 +817,13 @@ private struct AGYQuickActionItem: Identifiable {
     let prompt: String
 }
 
-private struct AGYTranscriptContent: View, Equatable {
-    let selected: AGYSession?
+private struct AGYHomeContent: View, Equatable {
     let recentSessions: [AGYSession]
     let totalSessionCount: Int
     let cwd: String
     let modelSummary: String
     let mode: String
     let approvalMode: String
-    let outputMode: String
     let error: String?
     let pendingSessionID: String?
     let busy: Bool
@@ -675,15 +835,13 @@ private struct AGYTranscriptContent: View, Equatable {
     let onOpenHistory: () -> Void
     let onRetryPending: () -> Void
 
-    static func == (lhs: AGYTranscriptContent, rhs: AGYTranscriptContent) -> Bool {
-        lhs.selected == rhs.selected
-            && lhs.recentSessions == rhs.recentSessions
+    static func == (lhs: AGYHomeContent, rhs: AGYHomeContent) -> Bool {
+        lhs.recentSessions == rhs.recentSessions
             && lhs.totalSessionCount == rhs.totalSessionCount
             && lhs.cwd == rhs.cwd
             && lhs.modelSummary == rhs.modelSummary
             && lhs.mode == rhs.mode
             && lhs.approvalMode == rhs.approvalMode
-            && lhs.outputMode == rhs.outputMode
             && lhs.error == rhs.error
             && lhs.pendingSessionID == rhs.pendingSessionID
             && lhs.busy == rhs.busy
@@ -724,10 +882,6 @@ private struct AGYTranscriptContent: View, Equatable {
         )
     ]
 
-    private var presentedMessages: [ChatMessage] {
-        (selected?.messages ?? []).flatMap(\.presented)
-    }
-
     private var workspaceTitle: String {
         let name = URL(fileURLWithPath: cwd).lastPathComponent
         return name.isEmpty || name == "/" ? (cwd.isEmpty ? "默认工作区" : cwd) : name
@@ -742,103 +896,37 @@ private struct AGYTranscriptContent: View, Equatable {
     }
 
     var body: some View {
-        LazyVStack(alignment: .leading, spacing: 14) {
-            if selected?.messages?.isEmpty != false {
-                emptyHome
-            }
-
-            if !presentedMessages.isEmpty {
-                if outputMode == NativeOutputMode.original.rawValue {
-                    ForEach(presentedMessages) { message in
-                        NativeMessageRow(
-                            message: message,
-                            streaming: message.id == selected?.messages?.last?.id && selected?.running == true
-                        )
-                    }
-                } else {
-                    NativeConversationTurns(
-                        turns: NativeConversationPresentation.turns(presentedMessages, live: nil, running: selected?.running ?? false),
-                        mode: NativeOutputMode(rawValue: outputMode) ?? .steps
-                    )
-                }
-            }
-
-            ForEach(selected?.approvals ?? []) { request in
-                AGYApprovalCard(request: request)
-            }
-
-            if selected?.running == true && outputMode == NativeOutputMode.original.rawValue {
-                HStack(spacing: 8) {
-                    ProgressView().controlSize(.small)
-                    Text("AGY 正在工作…").font(.footnote.weight(.medium)).foregroundStyle(.secondary)
-                }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 8)
-                .background(NativeTheme.surface, in: Capsule())
-            }
-
-            if let issue = error {
-                bannerCard(text: issue, icon: "wifi.exclamationmark", tint: .red, uiColor: .systemRed)
-            }
-            if let sessionError = selected?.error, !sessionError.isEmpty {
-                bannerCard(text: sessionError, icon: "exclamationmark.circle.fill", tint: .orange, uiColor: .systemOrange)
-            }
-
-            if let pendingSessionID {
-                VStack(alignment: .leading, spacing: 10) {
-                    Label("上一条消息的发送结果待确认", systemImage: "clock.badge.questionmark")
-                        .font(.subheadline.weight(.medium))
-                    HStack(spacing: 10) {
-                        Button("核对会话") { onSelectSession(pendingSessionID) }
-                        Button("按原编号重试", action: onRetryPending)
-                    }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
-                    .disabled(busy)
-                }
-                .padding(14)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(NativeTheme.surface, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-                .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).strokeBorder(NativeTheme.border, lineWidth: 0.5))
-            }
-
-            if selected?.messages?.isEmpty == false {
-                Color.clear.frame(height: 1).id("bottom")
-            }
-        }
-    }
-
-    private var emptyHome: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack(alignment: .center, spacing: 10) {
-                NativeAGYLogo(size: 36)
-                VStack(alignment: .leading, spacing: 2) {
+        VStack(alignment: .leading, spacing: 18) {
+            HStack(alignment: .center, spacing: 13) {
+                NativeAGYLogo(size: 42)
+                VStack(alignment: .leading, spacing: 4) {
                     Text("今天想做些什么？")
-                        .font(.headline)
+                        .font(.title3.bold())
                         .foregroundStyle(.primary)
                     Text("选择工作区或快捷任务，直接开始对话。")
-                        .font(.caption)
+                        .font(.footnote)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                 }
             }
+            .padding(.top, 2)
 
             Button(action: onOpenConfiguration) {
-                VStack(alignment: .leading, spacing: 8) {
+                VStack(alignment: .leading, spacing: 11) {
                     HStack(spacing: 10) {
                         Image(systemName: "folder.fill")
                             .font(.subheadline.weight(.semibold))
                             .foregroundStyle(NativeTheme.accent)
-                            .frame(width: 28, height: 28)
-                            .background(NativeTheme.accent.opacity(0.12), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                            .frame(width: 34, height: 34)
+                            .background(NativeTheme.accent.opacity(0.12), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
 
-                        VStack(alignment: .leading, spacing: 2) {
+                        VStack(alignment: .leading, spacing: 2.5) {
                             Text(workspaceTitle)
                                 .font(.subheadline.weight(.semibold))
                                 .foregroundStyle(.primary)
                                 .lineLimit(1)
                             Text(cwd.isEmpty ? "点击选择服务器工作目录" : cwd)
-                                .font(.caption2)
+                                .font(.caption)
                                 .foregroundStyle(.secondary)
                                 .lineLimit(1)
                                 .truncationMode(.middle)
@@ -856,37 +944,37 @@ private struct AGYTranscriptContent: View, Equatable {
                     }
 
                     ScrollView(.horizontal, showsIndicators: false) {
-                        HStack(spacing: 6) {
+                        HStack(spacing: 8) {
                             statusPill(icon: "cpu", text: modelSummary, tint: NativeTheme.accent)
                             statusPill(icon: mode == "accept-edits" ? "hammer.fill" : "list.clipboard", fallbackIcon: "sparkles", text: modeLabel, tint: .indigo)
                             statusPill(icon: approvalMode == "turbo" ? "bolt.fill" : "checkmark.shield", text: approvalLabel, tint: approvalMode == "turbo" ? .orange : .green)
                         }
                     }
                 }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 9)
+                .padding(.horizontal, 15)
+                .padding(.vertical, 13)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .background(NativeTheme.surface, in: RoundedRectangle(cornerRadius: 15, style: .continuous))
-                .overlay(RoundedRectangle(cornerRadius: 15, style: .continuous).strokeBorder(NativeTheme.border, lineWidth: 0.5))
+                .background(NativeTheme.surface, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+                .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).strokeBorder(NativeTheme.border, lineWidth: 0.5))
             }
             .buttonStyle(.plain)
 
-            VStack(alignment: .leading, spacing: 7) {
+            VStack(alignment: .leading, spacing: 10) {
                 Text("快速开始")
                     .font(.footnote.weight(.semibold))
                     .foregroundStyle(.secondary)
                     .padding(.horizontal, 2)
 
-                LazyVGrid(columns: [GridItem(.flexible(), spacing: 8), GridItem(.flexible(), spacing: 8)], spacing: 8) {
+                LazyVGrid(columns: [GridItem(.flexible(), spacing: 10), GridItem(.flexible(), spacing: 10)], spacing: 10) {
                     ForEach(Self.quickActions) { item in
                         Button { onSelectPrompt(item.prompt) } label: {
-                            HStack(alignment: .center, spacing: 9) {
+                            HStack(alignment: .center, spacing: 10) {
                                 Image(systemName: item.icon)
-                                    .font(.system(size: 13, weight: .semibold))
+                                    .font(.system(size: 14, weight: .semibold))
                                     .foregroundStyle(item.tint)
-                                    .frame(width: 28, height: 28)
-                                    .background(item.tint.opacity(0.12), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-                                VStack(alignment: .leading, spacing: 2) {
+                                    .frame(width: 32, height: 32)
+                                    .background(item.tint.opacity(0.12), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+                                VStack(alignment: .leading, spacing: 3) {
                                     Text(item.title)
                                         .font(.footnote.weight(.semibold))
                                         .foregroundStyle(.primary)
@@ -898,17 +986,17 @@ private struct AGYTranscriptContent: View, Equatable {
                                 }
                                 Spacer(minLength: 0)
                             }
-                            .padding(.horizontal, 10)
-                            .padding(.vertical, 8)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 11.5)
                             .frame(maxWidth: .infinity, alignment: .leading)
-                            .background(NativeTheme.surface, in: RoundedRectangle(cornerRadius: 13, style: .continuous))
-                            .overlay(RoundedRectangle(cornerRadius: 13, style: .continuous).strokeBorder(NativeTheme.border, lineWidth: 0.5))
+                            .background(NativeTheme.surface, in: RoundedRectangle(cornerRadius: 15, style: .continuous))
+                            .overlay(RoundedRectangle(cornerRadius: 15, style: .continuous).strokeBorder(NativeTheme.border, lineWidth: 0.5))
                         }
                         .buttonStyle(.plain)
                     }
                 }
 
-                HStack(spacing: 8) {
+                HStack(spacing: 10) {
                     Button(action: onOpenFiles) {
                         HStack(spacing: 6) {
                             Image(systemName: "at")
@@ -922,11 +1010,11 @@ private struct AGYTranscriptContent: View, Equatable {
                                 .font(.caption2)
                                 .foregroundStyle(.tertiary)
                         }
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 7)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 10)
                         .frame(maxWidth: .infinity)
-                        .background(NativeTheme.surface, in: RoundedRectangle(cornerRadius: 11, style: .continuous))
-                        .overlay(RoundedRectangle(cornerRadius: 11, style: .continuous).strokeBorder(NativeTheme.border, lineWidth: 0.5))
+                        .background(NativeTheme.surface, in: RoundedRectangle(cornerRadius: 13, style: .continuous))
+                        .overlay(RoundedRectangle(cornerRadius: 13, style: .continuous).strokeBorder(NativeTheme.border, lineWidth: 0.5))
                     }
                     .buttonStyle(.plain)
 
@@ -943,18 +1031,18 @@ private struct AGYTranscriptContent: View, Equatable {
                                 .font(.caption2)
                                 .foregroundStyle(.tertiary)
                         }
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 7)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 10)
                         .frame(maxWidth: .infinity)
-                        .background(NativeTheme.surface, in: RoundedRectangle(cornerRadius: 11, style: .continuous))
-                        .overlay(RoundedRectangle(cornerRadius: 11, style: .continuous).strokeBorder(NativeTheme.border, lineWidth: 0.5))
+                        .background(NativeTheme.surface, in: RoundedRectangle(cornerRadius: 13, style: .continuous))
+                        .overlay(RoundedRectangle(cornerRadius: 13, style: .continuous).strokeBorder(NativeTheme.border, lineWidth: 0.5))
                     }
                     .buttonStyle(.plain)
                 }
             }
 
             if !recentSessions.isEmpty {
-                VStack(alignment: .leading, spacing: 7) {
+                VStack(alignment: .leading, spacing: 10) {
                     HStack {
                         Text("继续最近对话")
                             .font(.footnote.weight(.semibold))
@@ -984,7 +1072,7 @@ private struct AGYTranscriptContent: View, Equatable {
                                         .foregroundStyle(session.running ? NativeTheme.accent : .secondary)
                                         .frame(width: 24)
 
-                                    VStack(alignment: .leading, spacing: 3) {
+                                    VStack(alignment: .leading, spacing: 4) {
                                         HStack(spacing: 6) {
                                             Text(session.name.isEmpty ? "未命名对话" : session.name)
                                                 .font(.subheadline.weight(.medium))
@@ -1010,20 +1098,33 @@ private struct AGYTranscriptContent: View, Equatable {
                                         .font(.caption2.weight(.semibold))
                                         .foregroundStyle(.tertiary)
                                 }
-                                .padding(.horizontal, 14)
-                                .padding(.vertical, 9)
+                                .padding(.horizontal, 15)
+                                .padding(.vertical, 12)
                                 .contentShape(Rectangle())
                             }
                             .buttonStyle(.plain)
 
                             if index + 1 < recentSessions.count {
-                                Divider().padding(.leading, 50).opacity(0.5)
+                                Divider().padding(.leading, 52).opacity(0.5)
                             }
                         }
                     }
-                    .background(NativeTheme.surface, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-                    .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).strokeBorder(NativeTheme.border, lineWidth: 0.5))
+                    .background(NativeTheme.surface, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+                    .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).strokeBorder(NativeTheme.border, lineWidth: 0.5))
                 }
+            }
+
+            if let issue = error {
+                AGYStatusBanner(text: issue, icon: "wifi.exclamationmark", tint: .red, uiColor: .systemRed)
+            }
+
+            if let pendingSessionID {
+                AGYPendingBanner(
+                    pendingSessionID: pendingSessionID,
+                    busy: busy,
+                    onSelectSession: onSelectSession,
+                    onRetryPending: onRetryPending
+                )
             }
         }
     }
@@ -1039,12 +1140,121 @@ private struct AGYTranscriptContent: View, Equatable {
                 .foregroundStyle(.primary)
                 .lineLimit(1)
         }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 3.5)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 5)
         .background(Color(uiColor: .tertiarySystemFill), in: Capsule())
     }
+}
 
-    private func bannerCard(text: String, icon: String, tint: Color, uiColor: UIColor) -> some View {
+private struct AGYConversationTranscript: View, Equatable {
+    let sessionID: String
+    let selected: AGYSession?
+    let outputMode: String
+    let error: String?
+    let pendingSessionID: String?
+    let busy: Bool
+    let onSelectSession: (String) -> Void
+    let onRetryPending: () -> Void
+
+    static func == (lhs: AGYConversationTranscript, rhs: AGYConversationTranscript) -> Bool {
+        lhs.sessionID == rhs.sessionID
+            && lhs.selected == rhs.selected
+            && lhs.outputMode == rhs.outputMode
+            && lhs.error == rhs.error
+            && lhs.pendingSessionID == rhs.pendingSessionID
+            && lhs.busy == rhs.busy
+    }
+
+    private var presentedMessages: [ChatMessage] {
+        (selected?.messages ?? []).flatMap(\.presented)
+    }
+
+    var body: some View {
+        LazyVStack(alignment: .leading, spacing: 14) {
+            if !presentedMessages.isEmpty {
+                if outputMode == NativeOutputMode.original.rawValue {
+                    ForEach(presentedMessages) { message in
+                        NativeMessageRow(
+                            message: message,
+                            streaming: message.id == selected?.messages?.last?.id && selected?.running == true
+                        )
+                    }
+                } else {
+                    NativeConversationTurns(
+                        turns: NativeConversationPresentation.turns(presentedMessages, live: nil, running: selected?.running ?? false),
+                        mode: NativeOutputMode(rawValue: outputMode) ?? .steps
+                    )
+                }
+            } else if selected?.approvals?.isEmpty != false {
+                if busy || (selected == nil && error == nil) {
+                    HStack(spacing: 10) {
+                        ProgressView().controlSize(.small)
+                        Text(selected?.id == sessionID ? "正在发送消息…" : "正在加载对话…")
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding(16)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(NativeTheme.surface, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                    .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).strokeBorder(NativeTheme.border, lineWidth: 0.5))
+                } else if selected != nil {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("还没有消息")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(.primary)
+                        Text("在下方输入内容开始对话，或向右滑动返回主界面。")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding(16)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(NativeTheme.surface, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                    .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).strokeBorder(NativeTheme.border, lineWidth: 0.5))
+                }
+            }
+
+            ForEach(selected?.approvals ?? []) { request in
+                AGYApprovalCard(request: request)
+            }
+
+            if selected?.running == true && outputMode == NativeOutputMode.original.rawValue {
+                HStack(spacing: 8) {
+                    ProgressView().controlSize(.small)
+                    Text("AGY 正在工作…").font(.footnote.weight(.medium)).foregroundStyle(.secondary)
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .background(NativeTheme.surface, in: Capsule())
+            }
+
+            if let issue = error {
+                AGYStatusBanner(text: issue, icon: "wifi.exclamationmark", tint: .red, uiColor: .systemRed)
+            }
+            if let sessionError = selected?.error, !sessionError.isEmpty {
+                AGYStatusBanner(text: sessionError, icon: "exclamationmark.circle.fill", tint: .orange, uiColor: .systemOrange)
+            }
+
+            if let pendingSessionID {
+                AGYPendingBanner(
+                    pendingSessionID: pendingSessionID,
+                    busy: busy,
+                    onSelectSession: onSelectSession,
+                    onRetryPending: onRetryPending
+                )
+            }
+
+            Color.clear.frame(height: 1).id("bottom")
+        }
+    }
+}
+
+private struct AGYStatusBanner: View {
+    let text: String
+    let icon: String
+    let tint: Color
+    let uiColor: UIColor
+
+    var body: some View {
         HStack(alignment: .top, spacing: 8) {
             Image(systemName: icon)
                 .font(.callout)
@@ -1056,6 +1266,31 @@ private struct AGYTranscriptContent: View, Equatable {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(tint.opacity(0.08), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(tint.opacity(0.25), lineWidth: 0.5))
+    }
+}
+
+private struct AGYPendingBanner: View {
+    let pendingSessionID: String
+    let busy: Bool
+    let onSelectSession: (String) -> Void
+    let onRetryPending: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Label("上一条消息的发送结果待确认", systemImage: "clock.badge.questionmark")
+                .font(.subheadline.weight(.medium))
+            HStack(spacing: 10) {
+                Button("核对会话") { onSelectSession(pendingSessionID) }
+                Button("按原编号重试", action: onRetryPending)
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+            .disabled(busy)
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(NativeTheme.surface, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).strokeBorder(NativeTheme.border, lineWidth: 0.5))
     }
 }
 
@@ -1215,7 +1450,8 @@ struct AGYHistory: View {
                         ForEach(group.sessions) { entry in
                             if let s = filtered.first(where: { $0.id == entry.id }) {
                                 Button {
-                                    Task { await store.select(s.id); store.tab = 0 }
+                                    store.tab = 0
+                                    Task { await store.select(s.id) }
                                 } label: {
                                     HStack(spacing: 12) {
                                         VStack(alignment: .leading, spacing: 5) {
