@@ -13,6 +13,8 @@ import Foundation
         p.returnToLatest(); precondition(p.mayFollow)
         precondition(NativeScrollPolicy.target(content: 100, viewport: 600, top: 20, bottom: 34) == -20)
         precondition(NativeScrollPolicy.target(content: 2000, viewport: 600, top: 20, bottom: 34) == 1434)
+        precondition(NativeScrollPolicy.target(content: 900, viewport: 560, top: 98, bottom: 102, anchorTop: true) == -98)
+        precondition(NativeScrollPolicy.target(content: 900, viewport: 560, top: 98, bottom: 102, anchorTop: false) == 442)
         p.beginGesture(); p.endGesture(distance: 1000); p.reset(); precondition(p.mayFollow)
         print("Passed scroll ownership, idle refresh, geometry and gesture policy checks")
     }

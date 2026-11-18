@@ -183,6 +183,10 @@ struct AGYChat: View {
         (store.selected?.inbox ?? []).filter(\.visibleInComposer)
     }
 
+    private var isEmptyHome: Bool {
+        store.selected?.messages?.isEmpty != false && (store.selected?.approvals?.isEmpty != false)
+    }
+
     var body: some View {
         NavigationStack {
             ScrollViewReader { _ in
@@ -220,13 +224,13 @@ struct AGYChat: View {
                     )
                     .equatable()
                     .padding(.horizontal, 16)
-                    .padding(.top, 12)
-                    .padding(.bottom, 14)
-                    .background(NativeScrollFollow(conversation: store.selected?.id ?? "new", jump: jumpToLatest, following: $following).frame(width: 0, height: 0))
+                    .padding(.top, isEmptyHome ? 6 : 12)
+                    .padding(.bottom, isEmptyHome ? 10 : 14)
+                    .background(NativeScrollFollow(conversation: store.selected?.id ?? "new", active: !isEmptyHome, jump: jumpToLatest, following: $following).frame(width: 0, height: 0))
                 }
                 .scrollDismissesKeyboard(.interactively)
                 .overlay(alignment: .bottomTrailing) {
-                    if !following {
+                    if !following && !isEmptyHome {
                         Button { jumpToLatest += 1 } label: {
                             Image(systemName: "arrow.down")
                                 .font(.subheadline.weight(.semibold))
@@ -523,11 +527,13 @@ struct AGYChat: View {
                 onStop: { Task { await store.stop() } },
                 onSend: {
                     composerFocused = false
-                    jumpToLatest += 1
+                    store.composer.dismissKeyboard()
+                    if !isEmptyHome { jumpToLatest += 1 }
                     Task { await store.send() }
                 },
                 onDeliver: { delivery in
                     composerFocused = false
+                    store.composer.dismissKeyboard()
                     Task { await store.send(delivery: delivery) }
                 }
             )
@@ -689,7 +695,7 @@ private struct AGYTranscriptContent: View, Equatable {
             icon: "folder.badge.gearshape",
             tint: .blue,
             title: "梳理项目架构",
-            subtitle: "浏览当前目录与核心模块职责",
+            subtitle: "目录结构与核心职责",
             prompt: "查看当前目录，梳理项目结构与关键模块职责"
         ),
         AGYQuickActionItem(
@@ -697,7 +703,7 @@ private struct AGYTranscriptContent: View, Equatable {
             icon: "ladybug.fill",
             tint: .orange,
             title: "排查与修复问题",
-            subtitle: "定位报错根因并给出修改方案",
+            subtitle: "定位根因并给出方案",
             prompt: "帮我排查一个问题，先定位根因再给出修改方案"
         ),
         AGYQuickActionItem(
@@ -705,7 +711,7 @@ private struct AGYTranscriptContent: View, Equatable {
             icon: "paintbrush.pointed.fill",
             tint: .purple,
             title: "绘制 SVG 与界面",
-            subtitle: "生成矢量图或优化 UI 代码",
+            subtitle: "矢量图示或界面原型",
             prompt: "根据当前项目绘制一张清晰的架构 SVG 示意图，让我直接在对话中预览"
         ),
         AGYQuickActionItem(
@@ -713,7 +719,7 @@ private struct AGYTranscriptContent: View, Equatable {
             icon: "checkmark.seal.fill",
             tint: .green,
             title: "检查改动与验证",
-            subtitle: "查看 Git 状态并运行必要测试",
+            subtitle: "查看状态并运行测试",
             prompt: "检查当前的 git 状态与最近改动，并运行必要的验证"
         )
     ]
@@ -796,34 +802,35 @@ private struct AGYTranscriptContent: View, Equatable {
                 .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).strokeBorder(NativeTheme.border, lineWidth: 0.5))
             }
 
-            Color.clear.frame(height: 1).id("bottom")
+            if selected?.messages?.isEmpty == false {
+                Color.clear.frame(height: 1).id("bottom")
+            }
         }
     }
 
     private var emptyHome: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            HStack(alignment: .center, spacing: 14) {
-                NativeAGYLogo(size: 46)
-                VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .center, spacing: 10) {
+                NativeAGYLogo(size: 36)
+                VStack(alignment: .leading, spacing: 2) {
                     Text("今天想做些什么？")
-                        .font(.title3.bold())
+                        .font(.headline)
                         .foregroundStyle(.primary)
-                    Text("连接远程开发工作区，编写代码、排查问题或预览原型。")
-                        .font(.footnote)
+                    Text("选择工作区或快捷任务，直接开始对话。")
+                        .font(.caption)
                         .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
+                        .lineLimit(1)
                 }
             }
-            .padding(.top, 4)
 
             Button(action: onOpenConfiguration) {
-                VStack(alignment: .leading, spacing: 12) {
+                VStack(alignment: .leading, spacing: 8) {
                     HStack(spacing: 10) {
                         Image(systemName: "folder.fill")
                             .font(.subheadline.weight(.semibold))
                             .foregroundStyle(NativeTheme.accent)
-                            .frame(width: 32, height: 32)
-                            .background(NativeTheme.accent.opacity(0.12), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+                            .frame(width: 28, height: 28)
+                            .background(NativeTheme.accent.opacity(0.12), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
 
                         VStack(alignment: .leading, spacing: 2) {
                             Text(workspaceTitle)
@@ -848,67 +855,60 @@ private struct AGYTranscriptContent: View, Equatable {
                         .foregroundStyle(.secondary)
                     }
 
-                    Divider().opacity(0.5)
-
                     ScrollView(.horizontal, showsIndicators: false) {
-                        HStack(spacing: 8) {
+                        HStack(spacing: 6) {
                             statusPill(icon: "cpu", text: modelSummary, tint: NativeTheme.accent)
                             statusPill(icon: mode == "accept-edits" ? "hammer.fill" : "list.clipboard", fallbackIcon: "sparkles", text: modeLabel, tint: .indigo)
                             statusPill(icon: approvalMode == "turbo" ? "bolt.fill" : "checkmark.shield", text: approvalLabel, tint: approvalMode == "turbo" ? .orange : .green)
                         }
                     }
                 }
-                .padding(14)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 9)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .background(NativeTheme.surface, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-                .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).strokeBorder(NativeTheme.border, lineWidth: 0.5))
+                .background(NativeTheme.surface, in: RoundedRectangle(cornerRadius: 15, style: .continuous))
+                .overlay(RoundedRectangle(cornerRadius: 15, style: .continuous).strokeBorder(NativeTheme.border, lineWidth: 0.5))
             }
             .buttonStyle(.plain)
 
-            VStack(alignment: .leading, spacing: 10) {
+            VStack(alignment: .leading, spacing: 7) {
                 Text("快速开始")
                     .font(.footnote.weight(.semibold))
                     .foregroundStyle(.secondary)
                     .padding(.horizontal, 2)
 
-                LazyVGrid(columns: [GridItem(.flexible(), spacing: 10), GridItem(.flexible(), spacing: 10)], spacing: 10) {
+                LazyVGrid(columns: [GridItem(.flexible(), spacing: 8), GridItem(.flexible(), spacing: 8)], spacing: 8) {
                     ForEach(Self.quickActions) { item in
                         Button { onSelectPrompt(item.prompt) } label: {
-                            VStack(alignment: .leading, spacing: 10) {
-                                HStack {
-                                    Image(systemName: item.icon)
-                                        .font(.system(size: 15, weight: .semibold))
-                                        .foregroundStyle(item.tint)
-                                        .frame(width: 32, height: 32)
-                                        .background(item.tint.opacity(0.12), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
-                                    Spacer()
-                                    Image(systemName: "arrow.up.left")
-                                        .font(.caption2.weight(.semibold))
-                                        .foregroundStyle(.tertiary)
-                                }
-                                VStack(alignment: .leading, spacing: 3) {
+                            HStack(alignment: .center, spacing: 9) {
+                                Image(systemName: item.icon)
+                                    .font(.system(size: 13, weight: .semibold))
+                                    .foregroundStyle(item.tint)
+                                    .frame(width: 28, height: 28)
+                                    .background(item.tint.opacity(0.12), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                                VStack(alignment: .leading, spacing: 2) {
                                     Text(item.title)
-                                        .font(.subheadline.weight(.semibold))
+                                        .font(.footnote.weight(.semibold))
                                         .foregroundStyle(.primary)
                                         .lineLimit(1)
                                     Text(item.subtitle)
-                                        .font(.caption)
+                                        .font(.caption2)
                                         .foregroundStyle(.secondary)
-                                        .lineLimit(2)
-                                        .multilineTextAlignment(.leading)
-                                        .fixedSize(horizontal: false, vertical: true)
+                                        .lineLimit(1)
                                 }
+                                Spacer(minLength: 0)
                             }
-                            .padding(13)
-                            .frame(maxWidth: .infinity, minHeight: 106, alignment: .topLeading)
-                            .background(NativeTheme.surface, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-                            .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).strokeBorder(NativeTheme.border, lineWidth: 0.5))
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 8)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .background(NativeTheme.surface, in: RoundedRectangle(cornerRadius: 13, style: .continuous))
+                            .overlay(RoundedRectangle(cornerRadius: 13, style: .continuous).strokeBorder(NativeTheme.border, lineWidth: 0.5))
                         }
                         .buttonStyle(.plain)
                     }
                 }
 
-                HStack(spacing: 10) {
+                HStack(spacing: 8) {
                     Button(action: onOpenFiles) {
                         HStack(spacing: 6) {
                             Image(systemName: "at")
@@ -922,11 +922,11 @@ private struct AGYTranscriptContent: View, Equatable {
                                 .font(.caption2)
                                 .foregroundStyle(.tertiary)
                         }
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 10)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 7)
                         .frame(maxWidth: .infinity)
-                        .background(NativeTheme.surface, in: RoundedRectangle(cornerRadius: 13, style: .continuous))
-                        .overlay(RoundedRectangle(cornerRadius: 13, style: .continuous).strokeBorder(NativeTheme.border, lineWidth: 0.5))
+                        .background(NativeTheme.surface, in: RoundedRectangle(cornerRadius: 11, style: .continuous))
+                        .overlay(RoundedRectangle(cornerRadius: 11, style: .continuous).strokeBorder(NativeTheme.border, lineWidth: 0.5))
                     }
                     .buttonStyle(.plain)
 
@@ -943,18 +943,18 @@ private struct AGYTranscriptContent: View, Equatable {
                                 .font(.caption2)
                                 .foregroundStyle(.tertiary)
                         }
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 10)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 7)
                         .frame(maxWidth: .infinity)
-                        .background(NativeTheme.surface, in: RoundedRectangle(cornerRadius: 13, style: .continuous))
-                        .overlay(RoundedRectangle(cornerRadius: 13, style: .continuous).strokeBorder(NativeTheme.border, lineWidth: 0.5))
+                        .background(NativeTheme.surface, in: RoundedRectangle(cornerRadius: 11, style: .continuous))
+                        .overlay(RoundedRectangle(cornerRadius: 11, style: .continuous).strokeBorder(NativeTheme.border, lineWidth: 0.5))
                     }
                     .buttonStyle(.plain)
                 }
             }
 
             if !recentSessions.isEmpty {
-                VStack(alignment: .leading, spacing: 10) {
+                VStack(alignment: .leading, spacing: 7) {
                     HStack {
                         Text("继续最近对话")
                             .font(.footnote.weight(.semibold))
@@ -1011,7 +1011,7 @@ private struct AGYTranscriptContent: View, Equatable {
                                         .foregroundStyle(.tertiary)
                                 }
                                 .padding(.horizontal, 14)
-                                .padding(.vertical, 11)
+                                .padding(.vertical, 9)
                                 .contentShape(Rectangle())
                             }
                             .buttonStyle(.plain)
@@ -1026,7 +1026,6 @@ private struct AGYTranscriptContent: View, Equatable {
                 }
             }
         }
-        .padding(.vertical, 6)
     }
 
     private func statusPill(icon: String, fallbackIcon: String? = nil, text: String, tint: Color) -> some View {
@@ -1040,8 +1039,8 @@ private struct AGYTranscriptContent: View, Equatable {
                 .foregroundStyle(.primary)
                 .lineLimit(1)
         }
-        .padding(.horizontal, 9)
-        .padding(.vertical, 5)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 3.5)
         .background(Color(uiColor: .tertiarySystemFill), in: Capsule())
     }
 

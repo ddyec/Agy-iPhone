@@ -4,6 +4,8 @@ cd "$(dirname "$0")/.."
 mkdir -p dist build
 xcrun swiftc -parse-as-library Sources/NativeCore.swift Sources/AGYDomain.swift Sources/NativeNetworking.swift Sources/NativeDownloadLinks.swift Sources/NativeMediaReferences.swift Sources/NativeConversationPresentation.swift Tests/NativePresentationTests.swift -o build/presentation
 build/presentation
+xcrun swiftc -parse-as-library Sources/NativeScrollPolicy.swift Tests/NativeScrollPolicyTests.swift -o build/scroll
+build/scroll
 swift scripts/prepare-icon.swift
 xcodebuild -project AGY.xcodeproj -scheme AGY -configuration Release \
   -destination 'generic/platform=iOS' -archivePath build/AGY.xcarchive \

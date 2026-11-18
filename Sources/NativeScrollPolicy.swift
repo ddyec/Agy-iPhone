@@ -10,7 +10,7 @@ struct NativeScrollPolicy {
     mutating func endGesture(distance: Double) { interacting = false; follows = distance.isFinite && distance <= 40 }
     mutating func returnToLatest() { interacting = false; follows = true }
     mutating func reset() { self = Self() }
-    static func target(content: Double, viewport: Double, top: Double, bottom: Double) -> Double {
-        max(-top, content - viewport + bottom)
+    static func target(content: Double, viewport: Double, top: Double, bottom: Double, anchorTop: Bool = false) -> Double {
+        anchorTop ? -top : max(-top, content - viewport + bottom)
     }
 }

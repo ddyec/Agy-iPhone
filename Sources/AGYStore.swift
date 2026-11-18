@@ -30,10 +30,7 @@ struct AGYDraftAttachment: Identifiable {
     let composer = AGYComposerState()
     var draft: String {
         get { composer.text }
-        set {
-            if composer.text != newValue { composer.text = newValue }
-            if newValue.isEmpty && composer.hasUncommittedText { composer.hasUncommittedText = false }
-        }
+        set { composer.setText(newValue) }
     }
     @Published var error: String?
     @Published var connection = "尚未连接"
@@ -243,6 +240,11 @@ struct AGYDraftAttachment: Identifiable {
         guard selectedDelivery != "steer" || (steeringReady && approvalMode != "legacy") else { error = "请先更新支持引导的网关"; return }
         guard selectedDelivery == "normal" || queueReady else { error = "请先更新支持排队的网关"; return }
         let textToSend = draft
+        let sentReferences = references
+        draft = ""
+        references = []
+        saveDraft()
+        composer.dismissKeyboard()
         busy = true; error = nil
         let account = epoch, selection = selectionEpoch
         defer { if epoch == account, selection == selectionEpoch { busy = false } }
@@ -250,7 +252,7 @@ struct AGYDraftAttachment: Identifiable {
             if selected == nil {
                 let s: AGYSession = try await api.json("sessions", method: "POST", body: .object(["cwd": .string(cwd), "baseModel": .string(baseModel), "effort": .string(effort), "mode": .string(mode), "approvalMode": .string(approvalMode)]))
                 guard epoch == account, selection == selectionEpoch else { return }
-                selected = s; saveDraft()
+                selected = s
                 cache.remove("draft-new"); cache.remove("references-draft-new")
             }
             guard let id = selected?.id else { return }
@@ -263,11 +265,21 @@ struct AGYDraftAttachment: Identifiable {
                 }
             }
             uploadProgress = ""
-            let p = PendingSend(sessionID: id, requestID: UUID().uuidString.lowercased(), text: textToSend, attachments: attachments.compactMap { $0.uploaded?.id }, references: references.map(\.path), delivery: selectedDelivery)
+            let p = PendingSend(sessionID: id, requestID: UUID().uuidString.lowercased(), text: textToSend, attachments: attachments.compactMap { $0.uploaded?.id }, references: sentReferences.map(\.path), delivery: selectedDelivery)
             guard SecureStore.write(try JSONEncoder().encode(p), account: "pending-send") else { throw AGYError.message("无法保存发送编号，消息尚未发送。") }
             pending = p
             try await submit(p, api: api, account: account)
-        } catch { if epoch == account { uploadProgress = ""; self.error = pending == nil ? error.localizedDescription : "发送结果待确认。请核对会话，或使用相同编号重试。\n" + error.localizedDescription } }
+        } catch {
+            if epoch == account {
+                uploadProgress = ""
+                if pending == nil && selection == selectionEpoch {
+                    if draft.isEmpty { draft = textToSend }
+                    if references.isEmpty { references = sentReferences }
+                    saveDraft()
+                }
+                self.error = pending == nil ? error.localizedDescription : "发送结果待确认。请核对会话，或使用相同编号重试。\n" + error.localizedDescription
+            }
+        }
     }
     private func submit(_ p: PendingSend, api: AGYAPI, account: UUID) async throws {
         let s: AGYSession = try await api.json("sessions/\(p.sessionID)/messages", method: "POST", body: .object(["text": .string(p.text), "requestID": .string(p.requestID), "attachments": .array((p.attachments ?? []).map { .string($0) }), "references": .array((p.references ?? []).map { .string($0) }), "delivery": .string(p.delivery ?? "normal")]))

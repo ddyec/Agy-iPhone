@@ -5,6 +5,7 @@ import UIKit
 /// preference, or competing defaultScrollAnchor. UIKit reports gesture state.
 struct NativeScrollFollow: UIViewRepresentable {
     let conversation: String
+    let active: Bool
     let jump: Int
     @Binding var following: Bool
     func makeCoordinator() -> Coordinator { Coordinator(following: $following) }
@@ -19,14 +20,32 @@ struct NativeScrollFollow: UIViewRepresentable {
     func updateUIView(_ view: Probe, context: Context) {
         let coordinator = context.coordinator
         coordinator.following = $following
-        if coordinator.conversation != conversation {
-            coordinator.conversation = conversation; coordinator.policy.reset(); coordinator.publish(); coordinator.schedule()
-        }
-        if coordinator.jump != jump {
+        let wasActive = coordinator.active
+        let conversationChanged = coordinator.conversation != conversation
+        coordinator.active = active
+        coordinator.conversation = conversation
+        if !active {
             coordinator.jump = jump
-            coordinator.ticker?.invalidate(); coordinator.ticker = nil
-            if let scroll = coordinator.scroll { scroll.setContentOffset(scroll.contentOffset, animated: false) }
-            coordinator.policy.returnToLatest(); coordinator.publish(); coordinator.schedule()
+            if wasActive || conversationChanged {
+                coordinator.homeUserScrolled = false
+                coordinator.ticker?.invalidate(); coordinator.ticker = nil
+                coordinator.policy.reset()
+                coordinator.publish()
+                coordinator.schedule()
+            }
+        } else {
+            if !wasActive || conversationChanged {
+                coordinator.homeUserScrolled = false
+                coordinator.policy.reset()
+                coordinator.publish()
+                coordinator.schedule()
+            }
+            if coordinator.jump != jump {
+                coordinator.jump = jump
+                coordinator.ticker?.invalidate(); coordinator.ticker = nil
+                if let scroll = coordinator.scroll { scroll.setContentOffset(scroll.contentOffset, animated: false) }
+                coordinator.policy.returnToLatest(); coordinator.publish(); coordinator.schedule()
+            }
         }
         DispatchQueue.main.async { coordinator.attach(view) }
     }
@@ -34,10 +53,13 @@ struct NativeScrollFollow: UIViewRepresentable {
     final class Probe: UIView {
         var moved: (() -> Void)?
         override func didMoveToWindow() { super.didMoveToWindow(); if window != nil { moved?() } }
+        override func safeAreaInsetsDidChange() { super.safeAreaInsetsDidChange(); moved?() }
     }
     final class Coordinator: NSObject {
         var following: Binding<Bool>
         var conversation = ""
+        var active = false
+        var homeUserScrolled = false
         var jump = 0
         var policy = NativeScrollPolicy()
         weak var scroll: UIScrollView?
@@ -48,7 +70,11 @@ struct NativeScrollFollow: UIViewRepresentable {
         func attach(_ probe: UIView) {
             var candidate = probe.superview
             while candidate != nil && !(candidate is UIScrollView) { candidate = candidate?.superview }
-            guard let found = candidate as? UIScrollView, found !== scroll else { return }
+            guard let found = candidate as? UIScrollView else { return }
+            if found === scroll {
+                if !active && !homeUserScrolled { schedule() }
+                return
+            }
             detach(); scroll = found
             observations = [found.observe(\.contentSize, options: [.new]) { [weak self] _, _ in DispatchQueue.main.async { self?.schedule() } },
                             found.observe(\.bounds, options: [.old, .new]) { [weak self] _, change in
@@ -66,6 +92,10 @@ struct NativeScrollFollow: UIViewRepresentable {
             observations.removeAll(); ticker?.invalidate(); ticker = nil; scroll = nil
         }
         @objc func panned(_ gesture: UIPanGestureRecognizer) {
+            if !active {
+                if gesture.state == .began { homeUserScrolled = true }
+                return
+            }
             if gesture.state == .began {
                 policy.beginGesture(); publish()
                 ticker?.invalidate(); ticker = CADisplayLink(target: self, selector: #selector(tick))
@@ -90,9 +120,18 @@ struct NativeScrollFollow: UIViewRepresentable {
             guard !scheduled else { return }; scheduled = true
             DispatchQueue.main.async { [weak self] in
                 guard let self else { return }; self.scheduled = false
-                guard let scroll = self.scroll, self.policy.mayFollow, !scroll.isTracking, !scroll.isDragging, !scroll.isDecelerating else { return }
+                guard let scroll = self.scroll, !scroll.isTracking, !scroll.isDragging, !scroll.isDecelerating else { return }
+                if !self.active {
+                    guard !self.homeUserScrolled else { return }
+                    let topY = NativeScrollPolicy.target(content: Double(scroll.contentSize.height), viewport: Double(scroll.bounds.height), top: Double(scroll.adjustedContentInset.top), bottom: Double(scroll.adjustedContentInset.bottom), anchorTop: true)
+                    if abs(Double(scroll.contentOffset.y) - topY) > 0.5 {
+                        scroll.setContentOffset(CGPoint(x: scroll.contentOffset.x, y: CGFloat(topY)), animated: false)
+                    }
+                    return
+                }
+                guard self.policy.mayFollow else { return }
                 let y = NativeScrollPolicy.target(content: Double(scroll.contentSize.height), viewport: Double(scroll.bounds.height), top: Double(scroll.adjustedContentInset.top), bottom: Double(scroll.adjustedContentInset.bottom))
-                if abs(Double(scroll.contentOffset.y)-y) > 1 { scroll.setContentOffset(CGPoint(x: scroll.contentOffset.x, y: CGFloat(y)), animated: false) }
+                if abs(Double(scroll.contentOffset.y) - y) > 1 { scroll.setContentOffset(CGPoint(x: scroll.contentOffset.x, y: CGFloat(y)), animated: false) }
             }
         }
     }

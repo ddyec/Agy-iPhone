@@ -7,6 +7,7 @@ import UIKit
     @Published var text: String = ""
     @Published var hasUncommittedText: Bool = false
     weak var activeTextView: UITextView?
+    var isApplyingProgrammaticText = false
 
     var hasContent: Bool {
         hasUncommittedText || !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -14,6 +15,8 @@ import UIKit
 
     func flushActiveInput() {
         guard let tv = activeTextView else { return }
+        isApplyingProgrammaticText = true
+        defer { isApplyingProgrammaticText = false }
         if tv.markedTextRange != nil {
             tv.unmarkText()
         }
@@ -23,6 +26,46 @@ import UIKit
         }
         if hasUncommittedText {
             hasUncommittedText = false
+        }
+    }
+
+    func setText(_ newValue: String, maxLines: Int = 6) {
+        isApplyingProgrammaticText = true
+        defer { isApplyingProgrammaticText = false }
+        if let tv = activeTextView {
+            if tv.markedTextRange != nil {
+                tv.unmarkText()
+            }
+            if tv.text != newValue {
+                UIView.performWithoutAnimation {
+                    tv.text = newValue
+                    let length = (newValue as NSString).length
+                    tv.selectedRange = NSRange(location: newValue.isEmpty ? 0 : length, length: 0)
+                    if let composerView = tv as? NativeComposerInput.ComposerTextView {
+                        composerView.refreshPlaceholderVisibility()
+                        composerView.refreshScrollState(maxLines: maxLines)
+                    }
+                    tv.invalidateIntrinsicContentSize()
+                }
+            } else if let composerView = tv as? NativeComposerInput.ComposerTextView {
+                composerView.refreshPlaceholderVisibility()
+            }
+        }
+        if hasUncommittedText {
+            hasUncommittedText = false
+        }
+        if text != newValue {
+            text = newValue
+        }
+    }
+
+    func clear() {
+        setText("")
+    }
+
+    func dismissKeyboard() {
+        if let tv = activeTextView, tv.isFirstResponder {
+            tv.resignFirstResponder()
         }
     }
 }
@@ -95,6 +138,12 @@ struct NativeComposerInput: UIViewRepresentable {
             DispatchQueue.main.async {
                 if !context.coordinator.parent.focused && uiView.isFirstResponder {
                     uiView.resignFirstResponder()
+                }
+            }
+        } else if focused && !uiView.isFirstResponder && uiView.window != nil {
+            DispatchQueue.main.async {
+                if context.coordinator.parent.focused && !uiView.isFirstResponder && uiView.window != nil {
+                    uiView.becomeFirstResponder()
                 }
             }
         }
@@ -190,7 +239,7 @@ struct NativeComposerInput: UIViewRepresentable {
             composerView.refreshScrollState(maxLines: parent.maxLines)
             composerView.invalidateIntrinsicContentSize()
 
-            guard !isProgrammaticUpdate else { return }
+            guard !isProgrammaticUpdate && !parent.state.isApplyingProgrammaticText else { return }
 
             // Wait until handwriting/IME composition commits before syncing full
             // text back to SwiftUI state so stroke recognition stays completely fluid.
